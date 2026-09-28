@@ -43,8 +43,6 @@ jobs:
     name: Compile Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 75
-        env:
-      HAS_RELEASE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -108,7 +106,7 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Sign with release keystore (optional)
-                if: ${{ env.HAS_RELEASE_KEY == 'true' }}
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

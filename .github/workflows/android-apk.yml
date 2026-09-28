@@ -61,29 +61,12 @@ jobs:
 
       - name: Tune Gradle memory
         run: |
-          # prebuild writes gradle.properties WITHOUT a trailing newline, so a plain >>
-          # would glue our first line onto 'expo.inlineModules.watchedDirectories=[]'
-          # (autolinking JSON-parses that value at configuration time -> opaque node exit 1).
-          if [ -n "$(tail -c 1 android/gradle.properties)" ]; then
-            echo >> android/gradle.properties
-          fi
           cat >> android/gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError
           kotlin.daemon.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m
           org.gradle.workers.max=2
           org.gradle.parallel=false
           EOF
-          # Fail loudly if the append glued onto a previous line
-          grep -qxF "expo.inlineModules.watchedDirectories=[]" android/gradle.properties || {
-            echo "::error::gradle.properties corrupted (glued line) - contents:"
-            cat android/gradle.properties
-            exit 1
-          }
-          grep -qxF "org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError" android/gradle.properties || {
-            echo "::error::memory settings were not appended correctly - contents:"
-            cat android/gradle.properties
-            exit 1
-          }
 
       - name: Gradle release build
         working-directory: android

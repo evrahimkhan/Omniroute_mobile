@@ -11,7 +11,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,15 +31,39 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Accept Android SDK licenses
+      - name: Locate or install Android SDK
+        id: sdk
         run: |
-          yes | /usr/lib/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          if [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME" ]; then
+            echo "SDK found at: $ANDROID_HOME"
+            echo "sdk_path=$ANDROID_HOME" >> "$GITHUB_OUTPUT"
+          elif [ -d /usr/lib/android-sdk ]; then
+            echo "SDK found at: /usr/lib/android-sdk"
+            echo "sdk_path=/usr/lib/android-sdk" >> "$GITHUB_OUTPUT"
+          else
+            echo "No preinstalled Android SDK - installing cmdline-tools..."
+            SDK_ROOT="$HOME/android-sdk"
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+            unzip -q /tmp/cmdtools.zip -d "$SDK_ROOT/cmdline-tools"
+            mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+            yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
+            echo "sdk_path=$SDK_ROOT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Accept Android SDK licenses
+        env:
+          ANDROID_HOME: ${{ steps.sdk.outputs.sdk_path }}
+        run: |
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          fi
 
       - name: Gradle release build
         working-directory: android
         env:
-          ANDROID_HOME: /usr/lib/android-sdk
-          ANDROID_SDK_ROOT: /usr/lib/android-sdk
+          ANDROID_HOME: ${{ steps.sdk.outputs.sdk_path }}
+          ANDROID_SDK_ROOT: ${{ steps.sdk.outputs.sdk_path }}
         run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
       - name: Package

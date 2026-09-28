@@ -78,16 +78,30 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Accept Android SDK licenses
+      - name: Detect Android SDK
+        id: sdk
         run: |
-          export ANDROID_HOME=/usr/lib/android-sdk
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          set -euo pipefail
+          for candidate in "${ANDROID_HOME:-}" /usr/lib/android-sdk "$HOME/Android/Sdk"; do
+            if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+              echo "home=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::No Android SDK found (tried ANDROID_HOME, /usr/lib/android-sdk, ~/Android/Sdk)"
+          exit 1
+
+      - name: Accept Android SDK licenses
+        env:
+          ANDROID_SDK_HOME: ${{ steps.sdk.outputs.home }}
+        run: |
+          yes | "$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
       - name: Gradle release build
         working-directory: android
         env:
-          ANDROID_HOME: /usr/lib/android-sdk
-          ANDROID_SDK_ROOT: /usr/lib/android-sdk
+          ANDROID_HOME: ${{ steps.sdk.outputs.home }}
+          ANDROID_SDK_ROOT: ${{ steps.sdk.outputs.home }}
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
@@ -98,7 +112,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_SDK_HOME: /usr/lib/android-sdk
+          ANDROID_SDK_HOME: ${{ steps.sdk.outputs.home }}
         run: node scripts/sign-apk.mjs android/app/build/outputs/apk/release/app-release.apk
 
       - name: Package APK

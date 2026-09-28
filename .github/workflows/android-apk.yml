@@ -72,6 +72,16 @@ jobs:
       - name: Generate native Android project
         run: npx expo prebuild --platform android --no-install
 
+      # Embedded Node runtime for on-device gateway hosting (docs/LOCAL_GATEWAY.md).
+      # Android 10+ cannot exec anything from app-writable storage, so the runtime
+      # must live in jniLibs/ and be extracted to the executable /data/app path.
+      # ABIs must match the -PreactNativeArchitectures used by the Gradle build.
+      # Set the NODE_RUNTIME_SHA256 repo variable to enforce an integrity check.
+      - name: Fetch embedded Node runtime
+        env:
+          NODE_RUNTIME_SHA256: ${{ vars.NODE_RUNTIME_SHA256 }}
+        run: node scripts/fetch-node-runtime.mjs --abis arm64-v8a,armeabi-v7a
+
       - name: Setup Java 17
         uses: actions/setup-java@v6
         with:
@@ -140,6 +150,11 @@ jobs:
         # armeabi-v7a,arm64-v8a,x86,x86_64 — x86/x86_64 are emulator-only and
         # roughly double the CMake/C++ compile time for a universal APK.
         run: ./gradlew assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      # A build that silently drops libnode.so still "succeeds" — fail here instead
+      # of shipping an APK whose local-gateway feature cannot possibly work.
+      - name: Verify embedded Node runtime in APK
+        run: node scripts/assert-apk-runtime.mjs android/app/build/outputs/apk/release/app-release.apk --abis arm64-v8a,armeabi-v7a
 
       # `secrets` is NOT an allowed context in an `if:` expression — GitHub
       # rejects the entire workflow file with "Unrecognized named-value:

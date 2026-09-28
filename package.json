@@ -10,14 +10,17 @@
     "web": "expo start --web",
     "prebuild:android": "expo prebuild --platform android --no-install",
     "prebuild:ios": "expo prebuild --platform ios --no-install",
-    "apk": "expo prebuild --platform android --no-install && cd android && ./gradlew assembleRelease",
+    "apk": "expo prebuild --platform android --no-install && node scripts/fetch-node-runtime.mjs && cd android && ./gradlew assembleRelease",
     "typecheck": "tsc --noEmit",
-    "workflows:check": "node scripts/check-workflows.mjs"
+    "workflows:check": "node scripts/check-workflows.mjs",
+    "runtime:fetch": "node scripts/fetch-node-runtime.mjs",
+    "runtime:verify": "node scripts/assert-apk-runtime.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "3.1.1",
     "expo": "~57.0.25",
+    "expo-build-properties": "^57.0.22",
     "expo-constants": "~57.0.19",
     "expo-font": "~57.0.4",
     "expo-haptics": "~57.0.3",

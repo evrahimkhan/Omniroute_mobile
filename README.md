@@ -77,6 +77,33 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 > gateway serves the dashboard over HTTP). For remote access put it behind a reverse proxy
 > with TLS, or use a tunnel.
 
+## Local gateway (hosting OmniRoute on the phone)
+
+The app is working toward hosting the npm OmniRoute **on the device**, so a
+self-hosted gateway needs no server, Docker, or Termux — see
+[docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md) for the full design, the verified
+platform constraints, and what is expected to degrade.
+
+How it fits together:
+
+- **The Node runtime ships inside the APK.** Android 10+ will not execute
+  anything the app can write, so `libnode.so` (Node 24.20.0, from
+  `nodejs-mobile`) is placed in `jniLibs/<abi>/` and extracted by the installer
+  into the executable `/data/app` path — Google's documented approach.
+  `npm run runtime:fetch` does the placement; CI then asserts the built APK
+  really contains it (`npm run runtime:verify`).
+- **The gateway itself is downloaded after install** (~121 MB tarball → 431 MB
+  unpacked), because bundling it would blow past store size limits.
+- **It runs in-process** — the CLI's daemon mode uses `child_process`, which is
+  blocked on mobile. SQLite falls back to Node's built-in `node:sqlite` or
+  bundled WASM, and native addons (`sharp`, `onnxruntime-node`, …) are lazily
+  imported behind `try/catch`, so their absence degrades features rather than
+  breaking the server.
+
+> Status: Phase 1 (runtime packaging) is implemented. The JNI bridge that starts
+> the runtime, the install flow, and the UI land in the following phases — none
+> of it has been exercised on a real device yet.
+
 ## CI pipeline
 
 | Workflow | Trigger | Produces |

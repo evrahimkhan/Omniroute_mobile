@@ -44,6 +44,14 @@
           "resizeMode": "contain",
           "imageWidth": 160
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useLegacyPackaging": true
+          }
+        }
       ]
     ]
   }

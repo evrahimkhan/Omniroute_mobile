@@ -29,7 +29,7 @@ on:
         default: true
   push:
     branches:
-      - main
+      - arena/01a0e9f8-omniroute-mobile
 
 concurrency:
   group: apk-${{ github.ref }}

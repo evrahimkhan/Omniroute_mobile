@@ -1,8 +1,8 @@
 # =============================================================================
 # OmniRoute Mobile — app CI gate
 #
-# Fast compile check for the mobile app itself, on every push to main and
-# every pull request:
+# Fast compile check for the mobile app itself, on every push to
+# arena/01a0e9f8-omniroute-mobile and every pull request:
 #   1. npm ci
 #   2. node scripts/check-workflows.mjs  (audit .github/workflows/*.yml)
 #   3. tsc --noEmit          (strict typecheck of the whole app)
@@ -18,7 +18,7 @@ name: App CI
 on:
   push:
     branches:
-      - main
+      - arena/01a0e9f8-omniroute-mobile
   pull_request:
   workflow_dispatch:
 

@@ -81,16 +81,20 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| **App CI** (`app-ci.yml`) | every PR (plus every push to `main`, when that branch exists) | workflow-file audit + typecheck + Hermes bundle (fast compile gate for the app) |
-| **Build Android APK** (`android-apk.yml`) | **manual dispatch** (`version`, `create_release`); also push to `main`, when that branch exists | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
+| **App CI** (`app-ci.yml`) | every push to `arena/01a0e9f8-omniroute-mobile` + every PR | workflow-file audit + typecheck + Hermes bundle (fast compile gate for the app) |
+| **Build Android APK** (`android-apk.yml`) | push to `arena/01a0e9f8-omniroute-mobile` + **manual dispatch** (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
 | **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
 | **Build iOS (EAS)** (`ios-eas.yml`) | **manual dispatch** (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |
 
-> **Automatic builds are currently off.** This repo has no `main` branch (the default
-> branch is `arena/01a0e73e-omniroute-mobile`), so the `push: branches: [main]` triggers in
-> `app-ci.yml` and `android-apk.yml` never fire — today every build starts from the Actions
-> tab (**workflow_dispatch**). Re-create `main`, or repoint those triggers at the default
-> branch, to get push-to-build back.
+> **On the push trigger.** This repo's default branch is a working branch
+> (`arena/01a0e73e-omniroute-mobile`), and there is no `main` — so the `push` triggers in
+> `app-ci.yml` and `android-apk.yml` point at `arena/01a0e9f8-omniroute-mobile`, the branch
+> these fixes were developed on. That means every push to that branch runs App CI **and**
+> publishes a GitHub Release with a fresh APK.
+>
+> If you move development to another branch, update the `branches:` list in those two files
+> to match (or re-create `main` and point them back at it). Everything else in the pipeline —
+> the OmniRoute source build and the iOS/EAS build — is manual-dispatch only and is unaffected.
 >
 > Until recently none of the three build workflows could run *at all*: each referenced the
 > `secrets` context inside an `if:` expression, which makes GitHub reject the entire

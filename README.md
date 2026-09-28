@@ -56,7 +56,8 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 
 1. **Get the app**
    - Android: latest APK in [GitHub Releases](https://github.com/evrahimkhan/Omniroute_mobile/releases)
-     (built automatically on every push to `main`).
+     (produced by the *Build Android APK* workflow — see [CI pipeline](#ci-pipeline) for
+     what triggers a build today).
    - iOS: see [Building the iOS app](#building-the-ios-app-eas) — run the *Build iOS (EAS)*
      workflow with an `EAS_TOKEN`, then install the internal IPA.
 2. **Get a gateway**
@@ -80,10 +81,24 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| **App CI** (`app-ci.yml`) | every push to `main` + every PR | typecheck + Hermes bundle (fast compile gate for the app) |
-| **Build Android APK** (`android-apk.yml`) | push to `main` + manual dispatch (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
+| **App CI** (`app-ci.yml`) | every PR (plus every push to `main`, when that branch exists) | workflow-file audit + typecheck + Hermes bundle (fast compile gate for the app) |
+| **Build Android APK** (`android-apk.yml`) | **manual dispatch** (`version`, `create_release`); also push to `main`, when that branch exists | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
 | **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
-| **Build iOS (EAS)** (`ios-eas.yml`) | manual dispatch (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |
+| **Build iOS (EAS)** (`ios-eas.yml`) | **manual dispatch** (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |
+
+> **Automatic builds are currently off.** This repo has no `main` branch (the default
+> branch is `arena/01a0e73e-omniroute-mobile`), so the `push: branches: [main]` triggers in
+> `app-ci.yml` and `android-apk.yml` never fire — today every build starts from the Actions
+> tab (**workflow_dispatch**). Re-create `main`, or repoint those triggers at the default
+> branch, to get push-to-build back.
+>
+> Until recently none of the three build workflows could run *at all*: each referenced the
+> `secrets` context inside an `if:` expression, which makes GitHub reject the entire
+> workflow file (`Unrecognized named-value: 'secrets'`) before any job is scheduled — the run
+> dies in 0s with zero jobs, the name shows as the file path, and the workflow's triggers stop
+> firing, including `workflow_dispatch`. That is fixed, and `scripts/check-workflows.mjs`
+> (run by App CI via `npm run workflows:check`) now audits GitHub's context-availability rules
+> so this class of breakage is caught in a PR instead of silently disabling a workflow.
 
 The source-build workflow uses the exact recipe from OmniRoute's own CI
 (Node 24, `npm run build:release`, 10 GB swap step, Turbopack) so the compiled
@@ -139,7 +154,7 @@ app/                  expo-router screens
   settings.tsx        server URL, test, clear data, about
 components/           OmniWebview, GatewayTab, ConnectionGate, ServerPill
 lib/                  features catalog, gateway probes, settings store, theme
-scripts/              CI helpers (version stamp, APK signing)
+scripts/              CI helpers (version stamp, APK signing, workflow audit)
 .github/workflows/    source compiler · Android APK · iOS EAS
 ```
 

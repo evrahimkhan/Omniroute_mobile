@@ -4,8 +4,14 @@
 # Fast compile check for the mobile app itself, on every push to main and
 # every pull request:
 #   1. npm ci
-#   2. tsc --noEmit          (strict typecheck of the whole app)
-#   3. expo export           (Metro/Hermes bundle → proves routing + imports)
+#   2. node scripts/check-workflows.mjs  (audit .github/workflows/*.yml)
+#   3. tsc --noEmit          (strict typecheck of the whole app)
+#   4. expo export           (Metro/Hermes bundle → proves routing + imports)
+#
+# Step 2 exists because GitHub rejects a workflow file whose expressions use
+# a context that isn't available at that key (e.g. `secrets` in an `if:`).
+# That failure kills the workflow silently — 0 jobs, no triggers, no retry —
+# so it is checked in CI rather than discovered weeks later.
 # =============================================================================
 name: App CI
 
@@ -42,6 +48,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Lint workflow files
+        run: node scripts/check-workflows.mjs
 
       - name: Typecheck
         run: npx tsc --noEmit

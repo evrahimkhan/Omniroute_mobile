@@ -97,13 +97,49 @@ jobs:
         run: |
           yes | "$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
+      # With --no-daemon, Gradle forks a single-use daemon that honours
+      # org.gradle.jvmargs from gradle.properties — the `-Xmx2048m` the Expo
+      # template writes. GRADLE_OPTS only sizes the *launcher* JVM and never
+      # reaches the build ("To honour the JVM settings for this build a
+      # single-use Daemon process will be forked"), so the heap has to be set
+      # in gradle.properties, not via GRADLE_OPTS.
+      - name: Tune Gradle memory
+        run: |
+          # prebuild writes gradle.properties WITHOUT a trailing newline, so a
+          # plain >> would glue our first line onto
+          # 'expo.inlineModules.watchedDirectories=[]' (autolinking JSON-parses
+          # that value at configuration time -> opaque node exit 1).
+          if [ -n "$(tail -c 1 android/gradle.properties)" ]; then
+            echo >> android/gradle.properties
+          fi
+          cat >> android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError
+          kotlin.daemon.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m
+          org.gradle.workers.max=2
+          org.gradle.parallel=false
+          EOF
+          # Fail loudly if the append glued onto a previous line
+          grep -qxF "expo.inlineModules.watchedDirectories=[]" android/gradle.properties || {
+            echo "::error::gradle.properties corrupted (glued line) - contents:"
+            cat android/gradle.properties
+            exit 1
+          }
+          grep -qxF "org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError" android/gradle.properties || {
+            echo "::error::memory settings were not appended correctly - contents:"
+            cat android/gradle.properties
+            exit 1
+          }
+
       - name: Gradle release build
         working-directory: android
         env:
           ANDROID_HOME: ${{ steps.sdk.outputs.home }}
           ANDROID_SDK_ROOT: ${{ steps.sdk.outputs.home }}
-          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+          NODE_ENV: production
+        # Only the two real-device ABIs. The prebuild default is
+        # armeabi-v7a,arm64-v8a,x86,x86_64 — x86/x86_64 are emulator-only and
+        # roughly double the CMake/C++ compile time for a universal APK.
+        run: ./gradlew assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
       # `secrets` is NOT an allowed context in an `if:` expression — GitHub
       # rejects the entire workflow file with "Unrecognized named-value:

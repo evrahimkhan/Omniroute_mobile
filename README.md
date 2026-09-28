@@ -80,13 +80,18 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| **Build OmniRoute source** (`omniroute-web.yml`) | push to `main` + manual dispatch (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
+| **App CI** (`app-ci.yml`) | every push to `main` + every PR | typecheck + Hermes bundle (fast compile gate for the app) |
 | **Build Android APK** (`android-apk.yml`) | push to `main` + manual dispatch (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
+| **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
 | **Build iOS (EAS)** (`ios-eas.yml`) | manual dispatch (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |
 
 The source-build workflow uses the exact recipe from OmniRoute's own CI
 (Node 24, `npm run build:release`, 10 GB swap step, Turbopack) so the compiled
-source always matches the upstream project.
+source always matches the upstream project. It is **manual-only** on purpose:
+OmniRoute's upstream project disabled hosted push triggers for this build
+(their #11946) because the hosted 7 GB runner OOMs on this tree in most
+attempts. Run it from the Actions tab whenever you want a fresh compiled
+source / gateway image — public repos get free Actions minutes.
 
 ### Repo secrets (all optional)
 

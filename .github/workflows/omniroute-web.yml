@@ -15,6 +15,12 @@
 #
 # The Android APK workflow (android-apk.yml) builds the native mobile shell;
 # this workflow produces the compiled source it connects to.
+#
+# NOTE: intentionally manual-only. OmniRoute's own project disabled hosted
+# push triggers for this exact build (upstream #11946): the hosted 7 GB
+# runner OOMs `next build` of this tree in the majority of attempts even
+# with the 10 GB swap step below. Run it on demand from the Actions tab —
+# it is cheap (public repo = free minutes) and always produces the artifact.
 # =============================================================================
 name: Build OmniRoute source
 
@@ -33,9 +39,6 @@ on:
         description: "Also push to Docker Hub (requires DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets)"
         type: boolean
         default: false
-  push:
-    branches:
-      - main
 
 concurrency:
   group: omniroute-${{ github.workflow }}-${{ github.ref }}
@@ -124,7 +127,7 @@ jobs:
     name: Build & push gateway Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.docker) || github.event_name == 'push' }}
+    if: ${{ inputs.docker }}
     needs: build
     permissions:
       contents: read

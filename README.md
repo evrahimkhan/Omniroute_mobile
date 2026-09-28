@@ -1,1 +1,149 @@
-# Omniroute_mobile
+<div align="center">
+
+# 📱 OmniRoute Mobile
+
+**A native mobile app for [OmniRoute](https://github.com/diegosouzapw/OmniRoute) — the free AI gateway.**
+
+One endpoint → **358 AI providers** → 150+ free tiers → 19 routing strategies.
+OmniRoute Mobile wraps the *entire* OmniRoute dashboard in a native Android/iOS shell:
+every feature, tab and menu from the web app lives in this app, and the OmniRoute
+source is compiled end-to-end by GitHub workflows.
+
+</div>
+
+---
+
+## What you get
+
+| | |
+|---|---|
+| **Native tab bar** | `Home` (dashboard) · `Chat` (Playground) · `Models` (catalog) · `Providers` · `More` |
+| **All features menu** | `More → All Features`: **88 features** in 9 sections — OmniProxy (endpoints, API keys, combos, all 14 compression engines, tools, integrations), Analytics, Costs (free tiers, radar), Monitoring (logs, audit, system), Dev Tools, Agentic (MCP, A2A, memory, skills, plugins), Other (gamification, batch), Configuration (all 12 settings pages), Help |
+| **In-app web views** | Every feature opens in-app on your gateway; cookies are shared, so you sign in once and roam everywhere |
+| **Gateway awareness** | Live status pill (online/offline, latency), connection test, offline error states, retry, open-in-browser |
+| **CI-compiled source** | GitHub workflows compile the OmniRoute source (Next.js build + Docker gateway image) and the app itself (Android APK → GitHub Releases, iOS via EAS) |
+
+The app is a **native shell around a gateway server** — the same architecture as
+OmniRoute's own Electron desktop app and PWA. The gateway does the routing
+(provider keys, fallbacks, compression, DB); the phone never needs API keys.
+
+## Architecture
+
+```
+┌─────────────────────────────── GitHub workflows ───────────────────────────────┐
+│                                                                                │
+│  omniroute-web.yml            android-apk.yml                ios-eas.yml       │
+│  ┌──────────────────┐         ┌────────────────────┐         ┌──────────────┐  │
+│  │ clone OmniRoute  │         │ npm ci             │         │ eas build    │  │
+│  │ npm ci           │         │ expo prebuild      │         │ (EAS cloud,  │  │
+│  │ next build + CLI │ ──APK──▶│ gradle assembleRel │         │ Apple creds) │  │
+│  │ docker image     │         │ → GitHub Release   │         └──────────────┘  │
+│  └─────────────────┘         └────────────────────┘                           │
+│           │                                                                    │
+└───────────┼────────────────────────────────────────────────────────────────────┘
+            ▼
+   ┌─────────────────┐        ┌──────────────────────────────┐
+   │ OmniRoute       │  HTTPS │  OmniRoute Mobile (this app) │
+   │ gateway         ◀────────┤  Expo / React Native shell   │
+   │ (Docker / VPS /  │        │  ┌────────────────────────┐  │
+   │ omniroute.online)│        │  │ tabs + feature catalog │  │
+   └─────────────────┘        │  │ WebView (session shared)│  │
+                              │  └────────────────────────┘  │
+                              └──────────────────────────────┘
+```
+
+## Quick start (user)
+
+1. **Get the app**
+   - Android: latest APK in [GitHub Releases](https://github.com/evrahimkhan/Omniroute_mobile/releases)
+     (built automatically on every push to `main`).
+   - iOS: see [Building the iOS app](#building-the-ios-app-eas) — run the *Build iOS (EAS)*
+     workflow with an `EAS_TOKEN`, then install the internal IPA.
+2. **Get a gateway**
+   - Public: `https://omniroute.online` (default in the app)
+   - Self-hosted from the compiled source:
+     ```bash
+     docker pull ghcr.io/<your-github-user>/omniroute-mobile:main   # built by the workflow
+     docker run -d --name omniroute -p 20128:20128 \
+       ghcr.io/<your-github-user>/omniroute-mobile:main
+     ```
+   - Or download the `omniroute-build-<sha>` artifact from the workflow run and run the
+     standalone server it contains.
+3. **Connect**: open the app → enter your gateway URL → **Test** → **Connect** → sign in to
+   the dashboard once. All 88 features are under `More → All Features` (with search).
+
+> Self-hosted on a LAN? Use `http://<machine-ip>:20128` (plain HTTP on Wi-Fi works; the
+> gateway serves the dashboard over HTTP). For remote access put it behind a reverse proxy
+> with TLS, or use a tunnel.
+
+## CI pipeline
+
+| Workflow | Trigger | Produces |
+|---|---|---|
+| **App CI** (`app-ci.yml`) | every push to `main` + every PR | typecheck + Hermes bundle (fast compile gate for the app) |
+| **Build Android APK** (`android-apk.yml`) | push to `main` + manual dispatch (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
+| **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
+| **Build iOS (EAS)** (`ios-eas.yml`) | manual dispatch (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |
+
+The source-build workflow uses the exact recipe from OmniRoute's own CI
+(Node 24, `npm run build:release`, 10 GB swap step, Turbopack) so the compiled
+source always matches the upstream project. It is **manual-only** on purpose:
+OmniRoute's upstream project disabled hosted push triggers for this build
+(their #11946) because the hosted 7 GB runner OOMs on this tree in most
+attempts. Run it from the Actions tab whenever you want a fresh compiled
+source / gateway image — public repos get free Actions minutes.
+
+### Repo secrets (all optional)
+
+| Secret | Used by | Purpose |
+|---|---|---|
+| `EAS_TOKEN` | Build iOS (EAS) | enable iOS builds |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | Build OmniRoute source (dispatch with `dockerhub: true`) | mirror the gateway image to your Docker Hub |
+| `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` | Build Android APK | sign the APK with a release key (Play Store) |
+
+## Building the iOS app (EAS)
+
+1. `npm i -g eas-cli && eas login`
+2. In this repo: `eas init` (links the project to your account)
+3. `eas credentials` (or let EAS manage certificates)
+4. Add your `EAS_TOKEN` to the repo: `eas secret:create --name EAS_TOKEN` (or via the
+   GitHub UI)
+5. Run **Build iOS (EAS)** from the Actions tab — pick a profile:
+   - `development` — dev client
+   - `preview` — internal distribution IPA (TestFlight-style)
+   - `production` — store build; `submit: true` pushes to App Store Connect
+
+## Development
+
+```bash
+npm install
+npx expo start            # Expo Go on a phone, or a dev client
+npm run typecheck         # tsc --noEmit
+npm run apk               # prebuild + gradle assembleRelease locally
+```
+
+- The feature catalog (`lib/features.ts`) mirrors the dashboard navigation from
+  `src/shared/constants/sidebarVisibility/sections.ts` in the OmniRoute repo —
+  re-sync it when you bump the compiled source.
+- Native projects (`android/`, `ios/`) are **generated** by `expo prebuild` in CI
+  and git-ignored; commit `app.json`, `eas.json`, and the `expo.config`-level
+  changes only.
+- Theme colors mirror the dashboard (`#0b0f1a` background, orange accent).
+
+## Repo layout
+
+```
+app/                  expo-router screens
+  (tabs)/             Home · Chat · Models · Providers · More
+  feature/[...path]   catch-all → any gateway route
+  settings.tsx        server URL, test, clear data, about
+components/           OmniWebview, GatewayTab, ConnectionGate, ServerPill
+lib/                  features catalog, gateway probes, settings store, theme
+scripts/              CI helpers (version stamp, APK signing)
+.github/workflows/    source compiler · Android APK · iOS EAS
+```
+
+## Credits & license
+
+- [OmniRoute](https://github.com/diegosouzapw/OmniRoute) by [diegosouzapw](https://github.com/diegosouzapw) — MIT
+- OmniRoute Mobile — MIT (see [LICENSE](LICENSE))

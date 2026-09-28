@@ -1,0 +1,189 @@
+# =============================================================================
+# OmniRoute source compiler
+#
+# Compiles the OmniRoute source (github.com/diegosouzapw/OmniRoute) that this
+# mobile app is built over:
+#
+#   1. `build`  — npm ci + `npm run build:release` (Next.js production build +
+#                 CLI bundle) → `omniroute-build.tar.gz` workflow artifact
+#                 (contains `.build/` and `dist/`, same layout the upstream
+#                 repo's manual build workflow publishes).
+#   2. `docker` — builds the upstream Dockerfile into a self-hostable gateway
+#                 image: ghcr.io/<owner>/omniroute-mobile:<sha> (and :main on
+#                 the main branch), plus Docker Hub when `dockerhub` is
+#                 enabled and DOCKERHUB_* secrets are set.
+#
+# The Android APK workflow (android-apk.yml) builds the native mobile shell;
+# this workflow produces the compiled source it connects to.
+#
+# NOTE: intentionally manual-only. OmniRoute's own project disabled hosted
+# push triggers for this exact build (upstream #11946): the hosted 7 GB
+# runner OOMs `next build` of this tree in the majority of attempts even
+# with the 10 GB swap step below. Run it on demand from the Actions tab —
+# it is cheap (public repo = free minutes) and always produces the artifact.
+# =============================================================================
+name: Build OmniRoute source
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "OmniRoute ref to compile (branch, tag, or commit SHA)"
+        required: false
+        default: "main"
+      docker:
+        description: "Build & push the Docker gateway image"
+        type: boolean
+        default: true
+      dockerhub:
+        description: "Also push to Docker Hub (requires DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: omniroute-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OMNIROUTE_REPO: "https://github.com/diegosouzapw/OmniRoute.git"
+
+jobs:
+  build:
+    name: Compile OmniRoute (Next.js + CLI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      sha: ${{ steps.fetch.outputs.sha }}
+    steps:
+      # The OmniRoute tree is large: the upstream project ships this exact
+      # step in its own build workflow because `next build` needs >7 GB.
+      - name: Expand Virtual Memory (10 GB swap)
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Checkout mobile repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Fetch OmniRoute source
+        id: fetch
+        run: |
+          set -euo pipefail
+          REF="${{ inputs.ref || 'main' }}"
+          # Partial clone: full commit history (so any branch/tag/SHA can be
+          # checked out) without downloading every blob of every commit.
+          git clone --filter=blob:none --no-checkout "$OMNIROUTE_REPO" source/OmniRoute
+          cd source/OmniRoute
+          if git rev-parse --verify --quiet "origin/$REF" >/dev/null 2>&1; then
+            git checkout -B "$REF" "origin/$REF"
+          else
+            git checkout "$REF"
+          fi
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          git log -1 --oneline
+
+      - name: Install dependencies
+        working-directory: source/OmniRoute
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Next.js app & CLI bundle
+        working-directory: source/OmniRoute
+        run: npm run build:release
+        env:
+          NODE_OPTIONS: "--max-old-space-size=12288"
+          OMNIROUTE_BUILD_MEMORY_MB: "12288"
+          OMNIROUTE_USE_TURBOPACK: "1"
+
+      - name: Archive build outputs
+        run: |
+          set -euo pipefail
+          cd source/OmniRoute
+          tar -czf omniroute-build.tar.gz .build dist
+          du -sh omniroute-build.tar.gz
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-build-${{ steps.fetch.outputs.sha }}
+          path: source/OmniRoute/omniroute-build.tar.gz
+          retention-days: 14
+
+  docker:
+    name: Build & push gateway Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: ${{ inputs.docker }}
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Fetch OmniRoute source
+        id: fetch
+        run: |
+          set -euo pipefail
+          REF="${{ inputs.ref || 'main' }}"
+          git clone --filter=blob:none --no-checkout "$OMNIROUTE_REPO" source/OmniRoute
+          cd source/OmniRoute
+          if git rev-parse --verify --quiet "origin/$REF" >/dev/null 2>&1; then
+            git checkout -B "$REF" "origin/$REF"
+          else
+            git checkout "$REF"
+          fi
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push to GitHub Container Registry
+        uses: docker/build-push-action@v6
+        with:
+          context: source/OmniRoute
+          file: source/OmniRoute/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/omniroute-mobile:sha-${{ steps.fetch.outputs.sha }}
+            ${{ (inputs.ref || 'main') == 'main' && format('ghcr.io/{0}/omniroute-mobile:main', github.repository_owner) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            OMNIROUTE_BUILD_WORKERS=2
+            OMNIROUTE_BUILD_MEMORY_MB=6144
+
+      - name: Build & push to Docker Hub (optional)
+        if: ${{ inputs.dockerhub == true && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        uses: docker/build-push-action@v6
+        with:
+          context: source/OmniRoute
+          file: source/OmniRoute/Dockerfile
+          push: true
+          platforms: linux/amd64
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/omniroute-mobile:sha-${{ steps.fetch.outputs.sha }}
+            ${{ (inputs.ref || 'main') == 'main' && format('{0}/omniroute-mobile:main', secrets.DOCKERHUB_USERNAME) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            OMNIROUTE_BUILD_WORKERS=2
+            OMNIROUTE_BUILD_MEMORY_MB=6144

@@ -1,0 +1,73 @@
+# =============================================================================
+# OmniRoute Mobile — iOS via EAS Build
+#
+# GitHub's free runners cannot produce a signed iOS build without Apple
+# credentials, so iOS uses Expo Application Services: EAS compiles the same
+# Expo project (this repo) into an IPA on Expo's Apple infrastructure.
+#
+# One-time setup (see README → "Building the iOS app"):
+#   1. `npm i -g eas-cli && eas login`
+#   2. `eas init` in this repo (links it to your EAS account)
+#   3. `eas build:configure` (or rely on the committed eas.json)
+#   4. `eas credentials` (register your Apple certs, or use EAS's automatic ones)
+#   5. Add the `EAS_TOKEN` secret to this repo (Settings → Secrets and variables)
+#
+# The job is skipped automatically when EAS_TOKEN is not configured.
+# =============================================================================
+name: Build iOS (EAS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile"
+        type: choice
+        options:
+          - development
+          - preview
+          - production
+        default: production
+      submit:
+        description: "Submit to App Store after build (production profile only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    name: EAS Build iOS
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: ${{ secrets.EAS_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Build iOS with EAS
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          set -euo pipefail
+          PROFILE="${{ inputs.profile || 'production' }}"
+          SUBMIT="${{ inputs.submit || false }}"
+          if [ "$SUBMIT" = "true" ] && [ "$PROFILE" = "production" ]; then
+            npx eas build --platform ios --profile "$PROFILE" --non-interactive --auto-submit
+          else
+            npx eas build --platform ios --profile "$PROFILE" --non-interactive
+          fi

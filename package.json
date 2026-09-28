@@ -1,0 +1,36 @@
+{
+  "name": "omniroute-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "prebuild:android": "expo prebuild --platform android --no-install",
+    "prebuild:ios": "expo prebuild --platform ios --no-install",
+    "apk": "expo prebuild --platform android --no-install && cd android && ./gradlew assembleRelease",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@react-native-async-storage/async-storage": "3.1.1",
+    "expo": "~57.0.25",
+    "expo-constants": "~57.0.19",
+    "expo-haptics": "~57.0.3",
+    "expo-linking": "~57.0.7",
+    "expo-router": "~57.0.23",
+    "expo-splash-screen": "~57.0.9",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-web": "0.21.3",
+    "react-native-webview": "14.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,156 @@
+# =============================================================================
+# OmniRoute Mobile — Android APK
+#
+# Compiles this Expo app into a release APK entirely in CI:
+#
+#   1. stamp version + build number into app.json
+#   2. npm ci
+#   3. expo prebuild --platform android  (generates the native project)
+#   4. ./gradlew assembleRelease          (GitHub runner Android SDK)
+#   5. (optional) re-sign with a release keystore from secrets
+#   6. upload artifact + publish a GitHub Release with the APK
+#
+# The resulting APK is signed with the debug key by default (fine for
+# sideloading). To publish to Play, add the ANDROID_KEYSTORE_* secrets
+# (see README → "Signing the APK for Play Store").
+# =============================================================================
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App version to stamp (e.g. 1.2.0) — empty keeps app.json"
+        required: false
+        default: ""
+      create_release:
+        description: "Publish the APK as a GitHub Release"
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: Compile Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Stamp version
+        id: ver
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version || '' }}"
+          [ -z "$VERSION" ] && VERSION="$(node -p "require('./app.json').expo.version")"
+          BUILDCODE="${GITHUB_RUN_NUMBER}"
+          node scripts/stamp-version.mjs "$VERSION" "$BUILDCODE"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "buildcode=$BUILDCODE" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Detect Android SDK
+        id: sdk
+        run: |
+          set -euo pipefail
+          for candidate in "${ANDROID_HOME:-}" /usr/lib/android-sdk "$HOME/Android/Sdk"; do
+            if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+              echo "home=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::No Android SDK found (tried ANDROID_HOME, /usr/lib/android-sdk, ~/Android/Sdk)"
+          exit 1
+
+      - name: Accept Android SDK licenses
+        env:
+          ANDROID_SDK_HOME: ${{ steps.sdk.outputs.home }}
+        run: |
+          yes | "$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+
+      - name: Gradle release build
+        working-directory: android
+        env:
+          ANDROID_HOME: ${{ steps.sdk.outputs.home }}
+          ANDROID_SDK_ROOT: ${{ steps.sdk.outputs.home }}
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Sign with release keystore (optional)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SDK_HOME: ${{ steps.sdk.outputs.home }}
+        run: node scripts/sign-apk.mjs android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Package APK
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "dist/OmnirouteMobile-v${{ steps.ver.outputs.version }}-b${{ steps.ver.outputs.buildcode }}.apk"
+          du -sh dist/*.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-mobile-apk
+          path: dist/*.apk
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.create_release) || github.event_name == 'push' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "mobile-v${{ steps.ver.outputs.version }}-b${{ steps.ver.outputs.buildcode }}"
+          name: "OmniRoute Mobile v${{ steps.ver.outputs.version }} (build ${{ steps.ver.outputs.buildcode }})"
+          files: dist/*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          body: |
+            **OmniRoute Mobile for Android**
+
+            A native shell over the [OmniRoute](https://github.com/diegosouzapw/OmniRoute) AI gateway —
+            every dashboard feature (playground, model catalog, providers, compression engines,
+            analytics, logs, settings, …) in one app.
+
+            ### Install
+            1. Download `OmnirouteMobile-v*.apk` below.
+            2. Copy it to your phone and open it (allow “install unknown apps”).
+            3. Enter your gateway URL on the first screen (default: `https://omniroute.online`,
+               or your self-hosted gateway built by the **Build OmniRoute source** workflow).
+            4. Sign in to the dashboard once — the session is shared across all features.
+
+            > Signed with the debug key (sideloading). See the repo README for release-key signing.

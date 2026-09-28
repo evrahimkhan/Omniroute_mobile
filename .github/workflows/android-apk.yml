@@ -59,15 +59,6 @@ jobs:
             yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           fi
 
-      - name: Tune Gradle memory
-        run: |
-          cat >> android/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError
-          kotlin.daemon.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m
-          org.gradle.workers.max=2
-          org.gradle.parallel=false
-          EOF
-
       - name: Gradle release build
         working-directory: android
         env:

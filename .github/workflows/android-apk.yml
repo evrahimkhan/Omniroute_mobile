@@ -105,8 +105,25 @@ jobs:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
+      # `secrets` is NOT an allowed context in an `if:` expression — GitHub
+      # rejects the entire workflow file with "Unrecognized named-value:
+      # 'secrets'" (run fails in 0s with no jobs). Check presence in a step
+      # instead, where `env:` can read the secret.
+      - name: Detect release keystore
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANDROID_KEYSTORE_BASE64 is not set - shipping the debug-signed APK (sideloading only)."
+          fi
+
       - name: Sign with release keystore (optional)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ steps.keystore.outputs.present == 'true' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

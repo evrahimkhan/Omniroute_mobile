@@ -166,8 +166,27 @@ jobs:
             OMNIROUTE_BUILD_WORKERS=2
             OMNIROUTE_BUILD_MEMORY_MB=6144
 
+      # `secrets` is NOT an allowed context in an `if:` expression — GitHub
+      # rejects the entire workflow file with "Unrecognized named-value:
+      # 'secrets'" (run fails in 0s with no jobs). Check presence in a step
+      # instead, where `env:` can read the secrets.
+      - name: Detect Docker Hub credentials
+        id: dockerhub
+        if: ${{ inputs.dockerhub }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set - skipping the Docker Hub mirror."
+          fi
+
       - name: Build & push to Docker Hub (optional)
-        if: ${{ inputs.dockerhub == true && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        if: ${{ steps.dockerhub.outputs.enabled == 'true' }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

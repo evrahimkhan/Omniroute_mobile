@@ -44,22 +44,42 @@ jobs:
     name: EAS Build iOS
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: ${{ secrets.EAS_TOKEN != '' }}
     steps:
+      # `secrets` is NOT an allowed context in a job-level `if:` — GitHub
+      # rejects the entire workflow file with "Unrecognized named-value:
+      # 'secrets'" before any job is scheduled, so the presence check has to
+      # happen inside a step, where `env:` can read the secret.
+      - name: Check EAS token
+        id: eas
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$EAS_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::EAS_TOKEN is not set - skipping the iOS build. See README → Building the iOS app."
+          fi
+
       - name: Checkout
+        if: ${{ steps.eas.outputs.enabled == 'true' }}
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
+        if: ${{ steps.eas.outputs.enabled == 'true' }}
         uses: actions/setup-node@v7
         with:
           node-version: "24"
 
       - name: Install EAS CLI
+        if: ${{ steps.eas.outputs.enabled == 'true' }}
         run: npm install -g eas-cli
 
       - name: Build iOS with EAS
+        if: ${{ steps.eas.outputs.enabled == 'true' }}
         env:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |

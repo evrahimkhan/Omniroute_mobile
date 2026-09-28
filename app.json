@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "OmniRoute Mobile",
+    "slug": "omniroute-mobile",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "omniroute",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0f1a",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "backgroundColor": "#0b0f1a",
+      "resizeMode": "contain",
+      "imageWidth": 160
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.evrahimkhan.omniroute.mobile"
+    },
+    "android": {
+      "package": "com.evrahimkhan.omniroute.mobile",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0f1a",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["INTERNET"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#0b0f1a",
+          "resizeMode": "contain",
+          "imageWidth": 160
+        }
+      ]
+    ]
+  }
+}

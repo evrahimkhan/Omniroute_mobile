@@ -41,16 +41,36 @@ function human(bytes) {
 /**
  * Is `text` in the APK's binary AndroidManifest.xml?
  *
- * The manifest is compiled AXML, not text, but its string pool keeps the
- * literals — as UTF-8 in aapt2's default encoding, and historically as UTF-16.
- * Both are searched rather than assumed, because a miss here would look like a
- * missing declaration.
+ * The manifest is compiled AXML, not text, but its string pool keeps the names
+ * and string values — as UTF-8 in aapt2's default encoding, and historically as
+ * UTF-16. Both are searched rather than assumed, because a miss here would look
+ * like a missing declaration.
+ *
+ * What this cannot see: attributes whose value is not a string. aapt2 compiles
+ * `foregroundServiceType="specialUse"` to the integer flag 0x40000000, so the
+ * literal is nowhere in the file — that half of the contract is asserted on the
+ * source manifest, against the constant the Kotlin actually passes to
+ * `startForeground`, by `npm run runtime:contract`.
  */
 function manifestContains(manifest, text) {
   return (
     manifest.includes(Buffer.from(text, 'utf8')) ||
     manifest.includes(Buffer.from(text, 'utf16le'))
   );
+}
+
+/**
+ * Printable strings in the manifest, for when an assertion fails.
+ *
+ * A binary manifest is not readable by eye, so a failure would otherwise say
+ * only "not found" — with no way to tell a wrong expectation from a declaration
+ * the merger dropped.
+ */
+function manifestStrings(manifest, limit = 80) {
+  const found = new Set();
+  for (const match of manifest.toString('latin1').matchAll(/[ -~]{4,}/g)) found.add(match[0]);
+  for (const match of manifest.toString('utf16le').matchAll(/[ -~]{4,}/g)) found.add(match[0]);
+  return [...found].slice(0, limit);
 }
 
 /**
@@ -70,7 +90,10 @@ function checkGatewayService(entries, apk) {
   const manifest = extractEntry(apk, manifestEntry);
   const declarations = [
     ['the gateway service', 'GatewayService'],
-    ['its foreground-service type', 'specialUse'],
+    // The *name* of the attribute, not its value: see the note above — the value
+    // is an integer flag in this file and is checked against the Kotlin constant
+    // by `npm run runtime:contract`.
+    ['its foreground-service type attribute', 'foregroundServiceType'],
     ['the subtype property Android 14 wants', 'PROPERTY_SPECIAL_USE_FGS_SUBTYPE'],
     ['the foreground-service permission', 'android.permission.FOREGROUND_SERVICE'],
     ['the special-use permission', 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE'],
@@ -88,6 +111,12 @@ function checkGatewayService(entries, apk) {
     } else {
       problems.push(`${label} is not in the merged manifest (${needle})`);
     }
+  }
+
+  if (problems.length) {
+    problems.push(
+      `manifest string pool, for reference: ${manifestStrings(manifest).join(' | ')}`
+    );
   }
   return problems;
 }

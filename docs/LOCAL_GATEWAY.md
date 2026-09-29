@@ -424,8 +424,14 @@ the app's parser and the bootstrap drifted apart twice (§5d).
 
 **What is verified, and what is not.** Gradle compiles all of this on every APK
 build, and `npm run runtime:verify` asserts the *packaged* result: the merged
-manifest really declares the service, its type, the subtype property and the
-three permissions. `npm run runtime:contract` (App CI, no Android SDK needed)
+manifest really declares the service, its foreground-service type attribute, the
+subtype property, the three permissions and the cleartext opt-in. Its check is
+honest about its own limit — aapt2 compiles `foregroundServiceType="specialUse"`
+to the integer `0x40000000`, so the *value* is not a string in that file and
+cannot be read by searching it; that half is asserted on the source manifest
+against the constant the Kotlin passes to `startForeground`, by
+`npm run runtime:contract`. A failing search prints the manifest's string pool,
+so a failure is diagnosable from the CI log alone. `npm run runtime:contract` (App CI, no Android SDK needed)
 checks that the JS surface, the Kotlin `Function`/`AsyncFunction` names, the
 status-map keys, the manifest and the `StartPrefs` usage agree — drift that
 compiles fine and would otherwise fail only on a phone. Not verified: how a real

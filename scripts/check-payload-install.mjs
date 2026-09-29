@@ -219,6 +219,10 @@ async function main() {
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
   check('standalone payload: the checksum manifest was fetched and matched', first.output.includes('checksum ok'));
   check('standalone payload: it answers /healthz on the configured port', first.servedOk === 'ok');
+  check(
+    'the install checks for free space before writing the archive',
+    /free space [\d.]+ MB, need about [\d.]+ MB/.test(first.output)
+  );
 
   // --- case 2: an npm-shaped tree with a decoy at the root -----------------
   const install2 = join(work, 'install-npm');
@@ -289,7 +293,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 19;
+  const total = 20;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

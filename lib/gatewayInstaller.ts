@@ -196,20 +196,25 @@ async function readMarker(): Promise<InstallMarker | null> {
 /** The gateway's own log, written by the bootstrap. Mirrors its GATEWAY_LOG_NAME. */
 const GATEWAY_LOG_FILE = 'gateway.log';
 
+/**
+ * The runtime's markers, written by `NodeRuntimeHost`. Mirrors its
+ * RUNTIME_LOG_FILE_NAME.
+ *
+ * A separate file because `node.log` is the process's captured stdout/stderr:
+ * everything in the app that writes there (Android WebView, most visibly) lands
+ * in it, and a tail read of 64 KB can miss the markers entirely on a busy run —
+ * which is how "the gateway printed nothing" used to be reported for a gateway
+ * that had failed with a specific, printed reason.
+ */
+const RUNTIME_LOG_FILE = 'runtime.log';
+
 function gatewayLogPath(): string {
   return `${NodeRuntime.getPaths().gatewayDir}/${GATEWAY_LOG_FILE}`;
 }
 
-/**
- * The runtime's own markers, kept while everything else in the runtime log is
- * dropped.
- *
- * That log is the process's captured stdout/stderr, so it also carries whatever
- * else in the app writes there — Android WebView logs a steady stream of its
- * own. These lines are the ones that say whether the script was handed to the
- * runtime and how node ended; the rest is noise that can bury them.
- */
-const RUNTIME_LOG_MARKER = '[node-runtime]';
+function runtimeLogPath(): string {
+  return `${NodeRuntime.getPaths().gatewayDir}/${RUNTIME_LOG_FILE}`;
+}
 
 /**
  * The log the card shows and the state machine reads.
@@ -220,15 +225,13 @@ const RUNTIME_LOG_MARKER = '[node-runtime]';
  * an empty gateway log only means something next to a runtime that started.
  */
 export async function readGatewayLog(maxBytes = 64 * 1024): Promise<string> {
-  const runtimeLog = await NodeRuntime.readLog(maxBytes).catch(() => '');
+  const runtimeLog = await NodeRuntime.readFile(runtimeLogPath(), maxBytes).catch(() => null);
   const gatewayLog = await NodeRuntime.readFile(gatewayLogPath(), maxBytes).catch(() => null);
 
-  const runtimeLines = (runtimeLog ?? '')
-    .split('\n')
-    .filter((line) => line.includes(RUNTIME_LOG_MARKER))
-    .join('\n');
-
-  return [gatewayLog ?? '', runtimeLines].filter(Boolean).join('\n');
+  // Gateway first: it is the narrative (what the install is doing). The runtime
+  // markers answer the questions the gateway cannot — whether node was handed
+  // the script at all, and how it ended.
+  return [gatewayLog ?? '', runtimeLog ?? ''].filter(Boolean).join('\n');
 }
 
 /** Current state, derived from the native runtime, the marker and the log. */
@@ -348,10 +351,13 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
   else if (shaUrl) env.GATEWAY_PAYLOAD_SHA256_URL = shaUrl;
   if (options.force) env.GATEWAY_FORCE_INSTALL = '1';
 
-  // Empty the log before starting, so the card can never show a previous
+  // Empty both logs before starting, so the card can never show a previous
   // attempt's failure as this one's — including when the runtime starts and
   // produces no output at all, which is the case that has no other signal.
-  await NodeRuntime.writeFile(gatewayLogPath(), '');
+  await Promise.all([
+    NodeRuntime.writeFile(gatewayLogPath(), ''),
+    NodeRuntime.writeFile(runtimeLogPath(), ''),
+  ]);
 
   await NodeRuntime.start({
     scriptPath,

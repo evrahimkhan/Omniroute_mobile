@@ -78,6 +78,17 @@ internal data class RuntimeStartRequest(
 internal object NodeRuntimeHost {
   private const val DIR_NAME = "node-runtime"
   private const val LOG_FILE_NAME = "node.log"
+
+  /**
+   * Where the markers below go, separately from [LOG_FILE_NAME].
+   *
+   * `node.log` is the process's captured stdout/stderr, so *everything* in the
+   * app that writes there lands in it — Android WebView most of all. The app
+   * needs the markers (was the script handed over? how did node end?) and they
+   * must not be pushable out of a tail window by unrelated output, so they get
+   * a file nothing else writes.
+   */
+  private const val RUNTIME_LOG_FILE_NAME = "runtime.log"
   private const val THREAD_NAME = "omniroute-node"
   private const val DEFAULT_STACK_MB = 8
   private const val MIN_STACK_MB = 2
@@ -124,6 +135,9 @@ internal object NodeRuntimeHost {
 
   fun logPath(context: Context): String = File(gatewayDir(context), LOG_FILE_NAME).absolutePath
 
+  fun runtimeLogPath(context: Context): String =
+    File(gatewayDir(context), RUNTIME_LOG_FILE_NAME).absolutePath
+
   fun status(context: Context?): Map<String, Any?> = mapOf(
     "available" to NodeRuntimeNative.loaded,
     "running" to isRunning,
@@ -153,6 +167,17 @@ internal object NodeRuntimeHost {
   fun appendToLog(logFilePath: String?, line: String) {
     if (logFilePath.isNullOrEmpty()) return
     runCatching { File(logFilePath).appendText("$line\n") }
+  }
+
+  /**
+   * Record a runtime milestone where the app can always find it.
+   *
+   * Goes to `node.log` as well, so a crash report has the story in one file,
+   * and to `runtime.log`, which is what the app reads back.
+   */
+  private fun markRuntime(context: Context, logFilePath: String?, line: String) {
+    appendToLog(logFilePath, line)
+    appendToLog(runtimeLogPath(context), line)
   }
 
   /**
@@ -210,7 +235,8 @@ internal object NodeRuntimeHost {
           // runtime that starts and produces no output is indistinguishable
           // from one that never ran at all — which is exactly the confusion a
           // silent no-op exit (code 0, empty log) causes on the phone.
-          appendToLog(
+          markRuntime(
+            context,
             request.logFilePath,
             "[node-runtime] starting node ${runtimeVersion()}: ${request.scriptPath}" +
               (if (request.args.isEmpty()) "" else " ${request.args.joinToString(" ")}")
@@ -218,10 +244,10 @@ internal object NodeRuntimeHost {
           val code = try {
             NodeRuntimeNative.nativeStart(argv, envPairs, request.workingDirectory, request.logFilePath)
           } catch (t: Throwable) {
-            appendToLog(request.logFilePath, "[node-runtime] fatal: ${t.message}")
+            markRuntime(context, request.logFilePath, "[node-runtime] fatal: ${t.message}")
             FAILED_TO_START
           }
-          appendToLog(request.logFilePath, "[node-runtime] node exited with code $code")
+          markRuntime(context, request.logFilePath, "[node-runtime] node exited with code $code")
           exitCode = code
           for (listener in exitListeners) {
             runCatching { listener(code) }

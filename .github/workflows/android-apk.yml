@@ -61,7 +61,11 @@ jobs:
           VERSION="${{ inputs.version || '' }}"
           [ -z "$VERSION" ] && VERSION="$(node -p "require('./app.json').expo.version")"
           BUILDCODE="${GITHUB_RUN_NUMBER}"
-          node scripts/stamp-version.mjs "$VERSION" "$BUILDCODE"
+          # The version *name* carries the build number too, so a screenshot of
+          # the app (Settings shows the version name; the code is buried) says
+          # which build is being looked at. The release tag stays derived from
+          # VERSION + BUILDCODE, so it is unchanged.
+          node scripts/stamp-version.mjs "${VERSION}-b${BUILDCODE}" "$BUILDCODE"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "buildcode=$BUILDCODE" >> "$GITHUB_OUTPUT"
 

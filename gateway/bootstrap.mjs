@@ -35,6 +35,7 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
+import { statfsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -46,6 +47,31 @@ const MARKER = 'install.json';
 const PAYLOAD_NAME = 'payload.tar.gz';
 /** Bytes between progress lines. Long installs must not look like a hang. */
 const PROGRESS_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Space the install is allowed to assume, when the payload's size is unknown.
+ *
+ * The published payload unpacks into tens of thousands of files, so the archive
+ * and its contents both have to fit; three times the archive is the rule used
+ * below, and this is the floor for when a server sends no Content-Length.
+ */
+const MIN_FREE_BYTES = 1536 * 1024 * 1024;
+
+/**
+ * Free bytes on the filesystem holding `dir`, or null when the platform will not
+ * say.
+ *
+ * `statfs` is a syscall, and it works on Android. A failure here must not stop an
+ * install that might otherwise work, so it only ever removes the check.
+ */
+function freeBytes(dir) {
+  try {
+    const stats = statfsSync(dir);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The gateway's own log, next to everything else it installs.
@@ -357,6 +383,23 @@ async function download(url, destPath) {
 
   const total = Number(response.headers.get('content-length') || 0);
   if (total) log(`payload is ${(total / (1024 * 1024)).toFixed(1)} MB`);
+
+  // Refuse before writing a byte if the phone cannot hold both the archive and
+  // what comes out of it. Failing here is clear ("needs 2.3 GB, has 800 MB");
+  // failing halfway through an unpack is a mystery, and it costs the user the
+  // one runtime start this app session gets.
+  const needed = total ? Math.round(total * 3) : MIN_FREE_BYTES;
+  const free = freeBytes(path.dirname(destPath));
+  if (free !== null) {
+    log(`free space ${(free / (1024 * 1024)).toFixed(1)} MB, need about ${(needed / (1024 * 1024)).toFixed(0)} MB`);
+    if (free < needed) {
+      throw new Error(
+        `not enough free space for the ${(total / (1024 * 1024)).toFixed(0)} MB payload: ` +
+          `${(free / (1024 * 1024)).toFixed(0)} MB free, about ${(needed / (1024 * 1024)).toFixed(0)} MB needed ` +
+          `(the archive plus what it unpacks into). Free up space and try again.`
+      );
+    }
+  }
 
   let received = 0;
   let lastProgress = 0;

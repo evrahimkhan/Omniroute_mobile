@@ -292,10 +292,31 @@ check(
 );
 
 check(
-  'the app reads that file, and filters the runtime log',
+  'the app reads that file, not the raw runtime log',
   sources.installer.includes('NodeRuntime.readFile(gatewayLogPath(), maxBytes)') &&
-    sources.installer.includes("RUNTIME_LOG_MARKER = '[node-runtime]'"),
-  'the firehose stays for crash reports; it no longer decides what the card says'
+    !sources.installer.includes('NodeRuntime.readLog('),
+  'the firehose (node.log) collects every writer in the app; it is for crash reports'
+);
+
+// The runtime's own markers get their own file for the same reason: a 64 KB tail
+// of node.log can be all WebView noise, and then the app cannot tell whether the
+// script was handed over — the distinction the whole of §5f rests on.
+const runtimeLogName = sources.host.match(/RUNTIME_LOG_FILE_NAME = "([^"]+)"/)?.[1];
+const appRuntimeLogName = sources.installer.match(/const RUNTIME_LOG_FILE = '([^']+)'/)?.[1];
+
+check(
+  'both sides agree on the runtime marker file name',
+  Boolean(runtimeLogName) && runtimeLogName === appRuntimeLogName,
+  `NodeRuntimeHost writes it and the app reads it (host ${JSON.stringify(
+    runtimeLogName
+  )}, app ${JSON.stringify(appRuntimeLogName)})`
+);
+
+check(
+  'the runtime writes its markers twice: to node.log and to that file',
+  sources.host.includes('appendToLog(logFilePath, line)') &&
+    sources.host.includes('appendToLog(runtimeLogPath(context), line)'),
+  'one copy for a crash report, one the app can always find'
 );
 
 check(
@@ -336,5 +357,5 @@ if (failures.length) {
 
 process.stdout.write(
   `\nruntime-contract — OK (${indexMethods.size} JS methods, ${statusFields.size} status fields, ` +
-    `manifest, bootstrap invocation + logs checked)\n`
+    `manifest, bootstrap invocation + both logs checked)\n`
 );

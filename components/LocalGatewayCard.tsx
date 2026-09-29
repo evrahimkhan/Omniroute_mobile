@@ -10,6 +10,7 @@ import {
   gatewayState,
   isLocalGatewaySupported,
   localGatewayUnavailableReason,
+  STOPPED_REASON,
   startLocalGateway,
   stopLocalGateway,
   uninstallLocalGateway,
@@ -72,6 +73,28 @@ export default function LocalGatewayCard({ onUse }: Props) {
   const phase = state?.phase ?? 'idle';
   const progress: GatewayProgress | null = state?.logTail ? gatewayProgress(state.logTail) : null;
   const working = phase === 'installing' || phase === 'starting';
+
+  /**
+   * What "try again" means once the runtime has exited.
+   *
+   * The runtime cannot be restarted inside a live process, so the only real
+   * action is to end the process and let the user open the app again. Tapping
+   * "Install & start" in that state used to throw a guard's message at them
+   * ("the runtime already ran and exited in this app session"), which reads like
+   * a bug report rather than a next step — so the button says what it does and
+   * offers it in one tap.
+   */
+  const restartApp = () => {
+    Alert.alert(
+      'Relaunch OmniRoute',
+      'The embedded runtime can only start once per app session, so the app has to close first. ' +
+        'Open it again from your launcher, then start hosting.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Close now', style: 'destructive', onPress: () => stopLocalGateway(STOPPED_REASON) },
+      ]
+    );
+  };
 
   const install = async () => {
     setError(null);
@@ -256,17 +279,25 @@ export default function LocalGatewayCard({ onUse }: Props) {
         ) : (
           <Pressable
             style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}
-            onPress={install}
+            onPress={state?.runtimeExited ? restartApp : install}
             disabled={busy || waiting}
             accessibilityRole="button"
           >
             {busy ? (
               <ActivityIndicator size="small" color="#0b0f1a" />
             ) : (
-              <MaterialCommunityIcons name="download" size={17} color="#0b0f1a" />
+              <MaterialCommunityIcons
+                name={state?.runtimeExited ? 'restart' : 'download'}
+                size={17}
+                color="#0b0f1a"
+              />
             )}
             <Text style={styles.btnLabelDark}>
-              {state?.installed ? 'Start the gateway' : 'Install & start'}
+              {state?.runtimeExited
+                ? 'Close the app to try again'
+                : state?.installed
+                  ? 'Start the gateway'
+                  : 'Install & start'}
             </Text>
           </Pressable>
         )}

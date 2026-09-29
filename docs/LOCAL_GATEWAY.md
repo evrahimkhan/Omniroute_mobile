@@ -519,11 +519,48 @@ The fix separates the two questions:
     runtime is over. (The WebView lines on the phone were timestamped *after*
     the exit, which is how this was noticed.)
 
-`readGatewayLog()` is therefore two sources: the gateway's own log, then the
-runtime's markers. Guards: `payload:install-test` asserts the file exists, names
+`readGatewayLog()` is therefore two sources, and — since the first version of
+this still read the firehose — neither of them is `node.log`:
+
+  - `gateway.log`, the gateway's own narrative;
+  - `runtime.log`, the `[node-runtime]` markers, written to a file of their own
+    by `NodeRuntimeHost` (`markRuntime()`) as well as to `node.log`. A 64 KB tail
+    of `node.log` on a busy run is all WebView noise, and then the app cannot say
+    whether the script was handed over at all — the one question that separates
+    "the install failed" from "nothing ran".
+
+`node.log` is still written, and is the right thing to read for a crash report. Guards: `payload:install-test` asserts the file exists, names
 the run, and receives failures too (19 assertions); `runtime:contract` asserts
 that both languages name the same file, that the bootstrap writes it and that the
 app reads it — the same handshake class as the run flag in §5f.
+
+### 5h. The other things an install can die of on a phone
+
+Two more failure modes were closed while chasing the device install, because
+each of them presents as a mystery rather than a message:
+
+  - **Free space.** The published payload is 776 MiB and unpacks into 44,002
+    files; the archive and its contents have to fit at once. A doomed install
+    used to fail *partway through the unpack*, which reads as a corrupt download
+    and costs the app session its one runtime start. `download()` now asks
+    `statfs` for the space on the install volume and refuses before writing a
+    byte, naming the numbers: `free space 812 MB, need about 2328 MB`. The rule
+    is three times the archive (the archive, what it unpacks into, and room to
+    breathe), with a 1.5 GB floor when the server sends no `Content-Length`. A
+    platform that will not answer `statfs` simply skips the check.
+  - **The dead end after a failure.** Once the runtime has exited, it cannot be
+    started again in that process, and the card's primary button used to throw
+    the guard's sentence — *"the gateway runtime already ran and exited in this
+    app session"* — which reads like a bug rather than a next step. It now reads
+    **Close the app to try again** when `GatewayState.runtimeExited` is true, and
+    asks before ending the process (that is the only way to end hosting, §5e).
+    A failure that has nothing to do with the runtime — a download that 404s,
+    say — no longer shows the "reopen the app" note at all, because reopening
+    would not help.
+
+Also, the APK's version *name* now carries the build number
+(`1.0.0-b43`), so a screenshot or Settings → Apps answers "which build is
+this?" without a round trip. The release tag is unchanged.
 
 ## 6. What will not work on-device
 

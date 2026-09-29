@@ -258,7 +258,16 @@ jobs:
             tail -n 40 "$log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          excerpt=$(grep -E 'error:|CMake Error|What went wrong|FAILURE:|> Task .* FAILED' "$log" | tail -n 10 | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
+          # The annotation is the only part of this log that is readable from
+          # every environment, so it has to carry the cause, not just the headers.
+          # Gradle prints the reason on the lines *after* 'What went wrong:', and
+          # nothing else in the file says it.
+          excerpt=$(awk '/What went wrong/{flag=1} flag{print} flag&&/^\* Try:/{exit}' "$log" \
+            | head -n 14 | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
+          if [ -z "$excerpt" ]; then
+            excerpt=$(grep -E 'error:|CMake Error|FAILURE:|Execution failed for task|Could not|Caused by' "$log" \
+              | tail -n 10 | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
+          fi
           echo "::error title=Gradle failed::${excerpt}"
 
       # A build that silently drops libnode.so still "succeeds" — fail here instead

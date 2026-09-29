@@ -6,7 +6,9 @@
 #   1. npm ci
 #   2. node scripts/check-workflows.mjs  (audit .github/workflows/*.yml)
 #   3. tsc --noEmit          (strict typecheck of the whole app)
-#   4. expo export           (Metro/Hermes bundle → proves routing + imports)
+#   4. node scripts/embed-gateway-bootstrap.mjs --check  (embedded installer current)
+#   5. npm run gateway:test  (installer log lines still match the app's parser)
+#   6. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -58,6 +60,12 @@ jobs:
       # installer, so fail here instead.
       - name: Check the embedded gateway bootstrap is current
         run: node scripts/embed-gateway-bootstrap.mjs --check
+
+      # The installer reports progress by printing log lines, and the app parses
+      # them. When the two drift, nothing fails — the UI just quietly shows the
+      # wrong thing — so the contract is asserted against the real lines.
+      - name: Check the gateway log contract
+        run: npm run gateway:test
 
       - name: Typecheck
         run: npx tsc --noEmit

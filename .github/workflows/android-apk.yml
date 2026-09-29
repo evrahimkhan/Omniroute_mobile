@@ -87,39 +87,43 @@ jobs:
       # here instead, in 30 seconds and in plain language. (Also the only place
       # anything ever looks inside the published artifact.)
       - name: Inspect the fetched runtime
-        # Deliberately no `set -e`: every command here is a probe, and a probe
-        # that finds nothing must not abort the report before it is emitted.
+        # Two deliberate choices, both learned the hard way:
+        #
+        #  * no `set -e` — every command here is a probe, and a probe that finds
+        #    nothing must not abort before the report is emitted;
+        #  * readelf goes to a file and is grepped from there, instead of being
+        #    piped into `grep -q`. With `pipefail`, grep -q exiting on its first
+        #    match sends SIGPIPE back up the pipe and the pipeline reports
+        #    failure even though the match was found — i.e. a confident, wrong
+        #    "does not export node::Start".
         run: |
           set -uo pipefail
           so=modules/node-runtime/android/src/main/jniLibs/arm64-v8a/libnode.so
           ls -la "$(dirname "$so")" || true
           readelf -h "$so" | grep -E 'Class:|Machine:|Type:' || true
 
-          syms=$(readelf -sW --dyn-syms "$so")
-          # $7 is the Ndx column: UND means the symbol is only referenced, not
-          # provided — which is exactly the case that would fail the link.
-          defined=$(printf '%s\n' "$syms" | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}')
+          syms=/tmp/libsyms.txt
+          readelf -sW --dyn-syms "$so" > "$syms" 2>/dev/null || true
 
-          if printf '%s\n' "$defined" | grep -qx '_ZN4node5StartEiPPc'; then
-            echo "✓ libnode.so exports node::Start"
-            echo "defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
+          # Undefined entries print UND where a defined one prints a section
+          # number, so requiring digits before the name proves it is provided.
+          if grep -qE 'FUNC[[:space:]]+GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+_ZN4node5StartEiPPc$' "$syms"; then
+            echo "✓ libnode.so exports node::Start ($(grep -c . "$syms") symbol lines)"
             exit 0
           fi
 
-          # Dump enough to tell the possible causes apart: symbol absent
-          # entirely, hidden by a version script, or stripped.
+          # Dump enough to tell the causes apart: symbol absent entirely, hidden
+          # by a version script, or stripped out of the release.
           {
             echo "the fetched libnode.so does not define node::Start"
-            echo "total defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
-            echo "--- lines mentioning node5Start (nothing = absent; UND = referenced only):"
-            printf '%s\n' "$syms" | grep 'node5Start' || echo "(no mention at all)"
+            echo "symbol lines: $(grep -c . "$syms" || true)"
+            echo "--- any mention of node5Start (nothing = absent; UND = referenced only):"
+            grep 'node5Start' "$syms" | head -5 || echo "(no mention at all)"
             echo "--- defined symbols containing 'start':"
-            printf '%s\n' "$defined" | grep -i 'start' | head -20 || echo "(none)"
-            echo "--- defined symbols containing 'node' (mangled, first 30):"
-            printf '%s\n' "$defined" | grep -i 'node' | head -30 || echo "(none)"
-            echo "--- napi_/node_api_ defined count: $(printf '%s\n' "$defined" | grep -cE '^(napi_|node_api_)' || true)"
-            echo "--- does a version script cover the dynamic symbols?"
-            readelf --version-info "$so" | head -20 || echo "(no version info)"
+            grep -i 'start' "$syms" | grep -v ' UND ' | head -20 || echo "(none)"
+            echo "--- napi_/node_api_ defined count: $(grep -cE ' (napi_|node_api_)' "$syms" || true)"
+            echo "--- version script?"
+            readelf --version-info "$so" | head -12 || echo "(no version info)"
             echo "--- dynamic section:"
             readelf -d "$so" | grep -E 'SONAME|NEEDED|FLAGS' | head -10 || echo "(none)"
           } > /tmp/symdump.txt 2>&1

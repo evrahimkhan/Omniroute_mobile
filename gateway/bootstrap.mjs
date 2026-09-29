@@ -164,6 +164,11 @@ async function extractTarGz(tarballPath, destDir) {
   let lastProgress = 0;
 
   const stats = () => `${files} files, ${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  // tar pads every record — metadata and file bodies alike — to 512 bytes.
+  const skipPadding = async (size) => {
+    const padding = (512 - (size % 512)) % 512;
+    if (padding) await reader.skip(padding);
+  };
 
   for (;;) {
     const header = await reader.read(512);
@@ -180,24 +185,31 @@ async function extractTarGz(tarballPath, destDir) {
 
     pendingLongName = null;
 
+    // Metadata entries (pax, GNU long name) carry a body that is *not* a file
+    // body — but it is still padded to a 512-byte boundary, and forgetting that
+    // padding desynchronises the whole stream from here on. (It fails loudly
+    // but confusingly: entries start being read from mid-record, and the first
+    // symptom is something like "EISDIR ... open <extract-dir>".)
     if (type === 'x' || type === 'g') {
       const data = await reader.read(size);
-      pendingPax = parsePax(data);
+      await skipPadding(size);
+      pendingPax = { ...(pendingPax ?? {}), ...parsePax(data) };
       // pax records override the ustar header fields for the next entry.
+      continue;
+    }
+
+    if (type === 'L') {
+      // GNU long name: the body is the name of the *next* entry.
+      const data = await reader.read(size);
+      await skipPadding(size);
+      pendingLongName = data.toString('utf8').replace(/\0+$/, '');
       continue;
     }
 
     if (pendingPax && pendingPax.path) {
       name = pendingPax.path;
-      pendingPax = null;
     }
-
-    if (type === 'L') {
-      // GNU long name: the payload is the name of the *next* entry.
-      const data = await reader.read(size);
-      pendingLongName = data.toString('utf8').replace(/\0+$/, '');
-      continue;
-    }
+    pendingPax = null;
 
     // Guard against a malicious or corrupt archive escaping the destination.
     const target = path.resolve(destDir, name);
@@ -240,9 +252,7 @@ async function extractTarGz(tarballPath, destDir) {
       await reader.skip(size);
     }
 
-    // Records are padded to a 512-byte boundary.
-    const padding = (512 - (size % 512)) % 512;
-    if (padding) await reader.skip(padding);
+    await skipPadding(size);
   }
 
   log(`extracted ${stats()}, ${dirs} dirs${skipped ? `, ${skipped} unsupported entries skipped` : ''}`);
@@ -254,6 +264,37 @@ async function sha256File(filePath) {
   const stream = createReadStream(filePath);
   for await (const chunk of stream) hash.update(chunk);
   return hash.digest('hex');
+}
+
+/**
+ * Fetch the expected checksum from a URL, when the app did not pin one.
+ *
+ * Accepts either the payload manifest this repo's CI publishes next to the
+ * archive (`{"sha256": "…"}`) or a bare hex digest.
+ *
+ * Be honest about what this buys: it is checked *after* the download, from the
+ * same host that served it, so it catches a truncated or corrupted 100+ MB
+ * transfer — the realistic failure — and not a host that has been tampered
+ * with. Pinning `GATEWAY_PAYLOAD_SHA256` in the app is what protects against
+ * that, at the cost of having to ship a new app when the payload changes.
+ */
+async function fetchExpectedSha256(url) {
+  const response = await fetch(url, { redirect: 'follow' });
+  if (!response.ok) throw new Error(`checksum URL returned HTTP ${response.status}`);
+  const text = (await response.text()).trim();
+  let candidate = text;
+  if (text.startsWith('{')) {
+    try {
+      candidate = String(JSON.parse(text).sha256 ?? '').trim();
+    } catch {
+      throw new Error('checksum URL returned malformed JSON');
+    }
+  }
+  const sha = candidate.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha)) {
+    throw new Error(`checksum URL did not contain a sha256 digest (got ${text.slice(0, 40)}…)`);
+  }
+  return sha;
 }
 
 async function download(url, destPath) {
@@ -284,16 +325,36 @@ async function download(url, destPath) {
 }
 
 /**
+ * Choose the entry script. `preferred` wins when given and present; otherwise
+ * the first candidate that exists; otherwise the first candidate, so the error
+ * message names something real.
+ */
+function pickEntry(preferred, candidates) {
+  const order = preferred ? [preferred, ...candidates.filter((c) => c !== preferred)] : candidates;
+  for (const candidate of order) {
+    if (entryExists(candidate)) return candidate;
+  }
+  return order[0];
+}
+
+// Set once the install directory is known, so pickEntry can look at the payload.
+let installedAppDir = '';
+function entryExists(entry) {
+  return Boolean(installedAppDir) && existsSync(path.join(installedAppDir, entry));
+}
+
+/**
  * Find the directory inside an extracted payload that holds the entry script.
  *
  * Tarballs do not agree on roots: a hand-rolled bundle puts `dist/server.js` at
  * the top, while `npm pack` nests everything under `package/`. Accept either —
  * exactly one level of nesting, and only when it is unambiguous.
  */
-async function resolveAppRoot(staging, entry) {
-  if (existsSync(path.join(staging, entry))) return staging;
+async function resolveAppRoot(staging, entries) {
+  const has = (dir) => entries.some((entry) => existsSync(path.join(dir, entry)));
+  if (has(staging)) return staging;
   const top = (await fs.readdir(staging, { withFileTypes: true })).filter((item) => item.isDirectory());
-  const matches = top.filter((item) => existsSync(path.join(staging, item.name, entry)));
+  const matches = top.filter((item) => has(path.join(staging, item.name)));
   if (matches.length === 1) {
     log(`payload is nested under ${matches[0].name}/`);
     return path.join(staging, matches[0].name);
@@ -314,20 +375,30 @@ async function main() {
   if (!gatewayDir) fatal(new Error('GATEWAY_DIR is required'));
 
   const appDir = path.join(gatewayDir, 'app');
-  const entry = process.env.GATEWAY_ENTRY || 'dist/server.js';
+  // Two payload shapes are in play: a packaged `npm` tree (entry
+  // dist/server.js) and a Next `output: 'standalone'` tree (entry server.js).
+  // Try the configured one first, then the other, so a mismatch here is a
+  // non-event rather than an install that fails at the last step.
+  const entries = ['dist/server.js', 'server.js'];
+  let entry = pickEntry(process.env.GATEWAY_ENTRY || '', entries);
   const url = process.env.GATEWAY_PAYLOAD_URL || '';
-  const expectedSha = (process.env.GATEWAY_PAYLOAD_SHA256 || '').trim().toLowerCase();
+  let expectedSha = (process.env.GATEWAY_PAYLOAD_SHA256 || '').trim().toLowerCase();
+  const shaUrl = (process.env.GATEWAY_PAYLOAD_SHA256_URL || '').trim();
   const force = process.env.GATEWAY_FORCE_INSTALL === '1';
 
   await fs.mkdir(gatewayDir, { recursive: true });
 
   const marker = await readMarker(gatewayDir);
-  const installed = existsSync(path.join(appDir, entry));
+  installedAppDir = appDir;
+  const installed = entries.some((candidate) => existsSync(path.join(appDir, candidate)));
   const markerMatches = Boolean(marker) && (!expectedSha || marker.sha256 === expectedSha);
   const upToDate = installed && markerMatches && !force;
 
   if (upToDate) {
     log(`gateway already installed at ${appDir}${marker?.installedAt ? ` (${marker.installedAt})` : ''}`);
+    // Nothing to install, but the entry still has to point at a real file: an
+    // older install may predate the current payload shape.
+    entry = pickEntry(process.env.GATEWAY_ENTRY || '', entries);
   } else {
     if (!url) {
       fatal(
@@ -341,6 +412,16 @@ async function main() {
 
     const tarballPath = path.join(gatewayDir, PAYLOAD_NAME);
     const partPath = `${tarballPath}.part`;
+
+    if (!expectedSha && shaUrl) {
+      try {
+        log('fetching the expected checksum…');
+        expectedSha = await fetchExpectedSha256(shaUrl);
+        log(`expected ${expectedSha.slice(0, 16)}…`);
+      } catch (err) {
+        throw new Error(`could not fetch the expected checksum from ${shaUrl}: ${err.message}`);
+      }
+    }
 
     try {
       await fs.rm(partPath, { force: true });
@@ -370,7 +451,12 @@ async function main() {
           }
           log('checksum ok');
         } else {
-          log('warning: GATEWAY_PAYLOAD_SHA256 is not set — installing without integrity verification');
+          // Kept as a single literal on purpose: scripts/check-gateway-log.mjs
+          // matches this text against the parser, and a split literal would
+          // silently escape that check.
+          log(
+            'warning: no checksum available (GATEWAY_PAYLOAD_SHA256 and GATEWAY_PAYLOAD_SHA256_URL are both unset) — installing without integrity verification'
+          );
         }
 
         await fs.rename(partPath, tarballPath);
@@ -382,9 +468,11 @@ async function main() {
       await fs.rm(staging, { recursive: true, force: true });
       await extractTarGz(tarballPath, staging);
 
-      const appRoot = await resolveAppRoot(staging, entry);
-      if (!existsSync(path.join(appRoot, entry))) {
-        throw new Error(`payload does not contain ${entry}`);
+      const appRoot = await resolveAppRoot(staging, entries);
+      if (!entries.some((candidate) => existsSync(path.join(appRoot, candidate)))) {
+        throw new Error(
+          `payload contains none of: ${entries.join(', ')} (is this a gateway bundle?)`
+        );
       }
       if (appRoot !== staging) {
         // Normalise to <gatewayDir>/app so the boot path does not depend on how
@@ -398,6 +486,11 @@ async function main() {
 
       await fs.rm(appDir, { recursive: true, force: true });
       await fs.rename(staging, appDir);
+
+      // Now that the payload is in place, fix up which entry actually exists.
+      const resolved = pickEntry(process.env.GATEWAY_ENTRY || '', entries);
+      if (resolved !== entry) log(`entry is ${resolved} (not ${entry})`);
+      entry = resolved;
 
       await fs.writeFile(
         path.join(gatewayDir, MARKER),

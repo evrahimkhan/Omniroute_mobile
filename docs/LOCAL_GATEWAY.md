@@ -211,6 +211,7 @@ ways:
 |---|---|---|---|
 | Full npm tree (`--omit=dev`) | 2.6 GB | 125,106 | resolved on-device or shipped whole |
 | `omniroute` package alone | 481 MB | 21,898 | — |
+| That package, packed for the phone | 115.6 MB (431.6 MB raw) | 21,898 | CI, once per payload update |
 
 2.6 GB is not a payload anyone should download to a phone, and resolving it
 on-device (option 1 below) means the phone does the work *and* keeps the bytes.
@@ -225,20 +226,54 @@ and there is a backend-only variant: `OMNIROUTE_BUILD_BACKEND_ONLY=1`
 out. The result is a directory with its own `standalone/node_modules`, which is
 what the app should download.
 
-Consequences, recorded now so the next step does not rediscover them:
+Consequences, recorded now so the next step does not rediscover them — and
+**the pipeline that produces this payload is implemented in `omniroute-web.yml`**, as five steps appended to the
+build job, gated by the workflow's `payload` input (on by default):
 
-- The payload is produced in CI from source, as `omniroute-web.yml` already
-  does — that job is manual-only and needs the 10 GB swap step because this tree
-  OOMs a 7 GB runner. The mobile payload should come out of the *same* build,
-  not a new one.
-- Until that exists, `gateway/bootstrap.mjs` accepts any tarball whose root (or
-  whose single top-level directory) contains `dist/server.js`. That covers both
-  the future standalone output and today's npm tree, so the installer did not
-  have to wait for the packaging decision.
-- No `NODE_RUNTIME_SHA256`-style integrity variable is set for the payload yet,
-  so `EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256` is empty and the bootstrap installs
-  with a loud warning instead of a verified checksum. Setting it once the CI job
-  exists is a one-line change.
+1. *Locate the standalone server* — `next build` puts the output wherever the
+   build script was pointed, so the step searches for a directory that contains
+   `server.js`, prefers one with its own `node_modules`, and prints what it
+   found. A build with no standalone output fails here, with a listing of what
+   the build *did* produce, rather than half an hour later in the publish step.
+2. *Pack the gateway payload* — `scripts/pack-payload.mjs` writes
+   `omniroute-payload.tar.gz` plus a `…tar.gz.json` manifest
+   (`{entry, sha256, bytes, uncompressedBytes, files}`). The writer is
+   deterministic — sorted entries, fixed mtime/uid/gid, one mode bit, pax
+   records only for names over 100 bytes — so the same tree always packs to the
+   same digest. Packing the real npm package twice produced byte-identical
+   archives (21,898 files, 431.6 MB → 115.6 MB).
+3. *Boot the payload before publishing it* — extracts the archive with the
+   app's own extractor and runs the entry as a child process, polling
+   `/healthz` for up to 120 s. A payload that does not come up is never
+   published, so the job proves itself instead of needing a second opinion.
+   This is also the step that would catch a missing dependency tree.
+4. *Publish the gateway payload* — `gh release` on the fixed tag
+   `gateway-payload`, with `--clobber`, uploading both the archive and the
+   manifest.
+5. Upload both as a run artifact, so an unpublishable payload can still be
+   inspected.
+
+Two decisions worth keeping:
+
+- **A fixed tag, never `latest`.** `releases/latest` moves when an APK release
+  is published, which would silently repoint the payload URL of every installed
+  app. `lib/gatewayInstaller.ts` builds the URL from the tag.
+- **The app fetches the digest instead of pinning it.** `EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256`
+  stays empty on purpose: pinning a digest into the APK would break every
+  payload update until a new APK shipped. The app fetches `…tar.gz.json` from
+  the same release and verifies the download against it, which catches the
+  realistic failure (a truncated or corrupted transfer) but not a compromised
+  host — the bootstrap's log line says exactly that.
+
+The installer accepts either payload shape. `gateway/bootstrap.mjs` treats
+`GATEWAY_ENTRY` as a preference, not a path: it tries the configured entry, then
+`dist/server.js`, then `server.js`, and logs when it picks something other than
+the default. That covers a packaged npm tree (`dist/server.js`) and a Next
+standalone tree (`server.js`) with no configuration change, and it re-resolves
+the entry on later runs, so an install made by an earlier build still starts.
+
+**Not yet done:** the job has never been dispatched (`workflow_dispatch`-only),
+so the payload CI produces has not been downloaded by a phone.
 
 Rejected: **resolving dependencies on the device.** It needs a registry
 round-trip, the full 2.6 GB of disk, and an answer for the optional native
@@ -336,6 +371,6 @@ These are expected degradations; the UI must say so rather than pretend:
 |---|---|
 | `digidem/nodejs-mobile` is a young, low-adoption fork (2 stars at time of writing) | Pin the exact release + verify the artifact checksum in CI; the build recipe is reproducible from upstream Node (`scripts/prepare.sh`), so we can rebuild it ourselves if it stalls. |
 | Untested on a real device | Every part of phases 1–3 that a machine *can* verify is verified (CI builds the native code and checks the APK's contents; the installer is exercised end to end against the real payload), but nothing has run inside an Android app process yet. That is the next milestone, and it is a hardware one. |
-| First-run download is too big | Not yet solved: the current payload is npm's 2.6 GB tree. §5b has the replacement (upstream's backend-only standalone build) and the installer already accepts it. Until then, treat "install" as Wi-Fi-only, and note that the checksum cannot be enforced because no `EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256` is published yet — the bootstrap says so in its log rather than pretending it verified something. |
+| First-run download is big | Partly solved. §5b's pipeline packs the tree in CI — the packaged npm tree comes to 115.6 MB gzipped, and the standalone build it is meant to carry is smaller — and the digest is published next to it, so the app verifies what it downloads. Until the job is dispatched, "install" still means npm's tree, so treat it as Wi-Fi-only. |
 | The app and the payload drift apart | The bootstrap is the app's contract with the payload; it is versioned with the app, but the payload URL is not pinned to a version yet, so "latest" can move under an installed app. Pinning both to one release is part of the CI job in §5b. |
 | Native exec from app storage | Avoided entirely — the runtime lives in the APK's lib dir. |

@@ -8,7 +8,8 @@
 #   3. tsc --noEmit          (strict typecheck of the whole app)
 #   4. node scripts/embed-gateway-bootstrap.mjs --check  (embedded installer current)
 #   5. npm run gateway:test  (installer log lines still match the app's parser)
-#   6. expo export           (Metro/Hermes bundle → proves routing + imports)
+#   6. npm run payload:test  (the packer's tar.gz survives the on-device extractor)
+#   7. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -71,6 +72,12 @@ jobs:
       # wrong thing — so the contract is asserted against the real lines.
       - name: Check the gateway log contract
         run: npm run gateway:test
+
+      # The packer (CI, writes the payload) and the installer's extractor
+      # (on-device, reads it) are two tar implementations that must agree.
+      # They did not, once.
+      - name: Check the payload round-trips
+        run: npm run payload:test
 
       - name: Typecheck
         run: npx tsc --noEmit

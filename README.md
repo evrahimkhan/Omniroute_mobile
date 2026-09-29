@@ -97,8 +97,9 @@ How it fits together:
   Kotlin `NodeRuntime` over a small C++ shim that calls `node::Start` on a
   dedicated thread, with the environment (`TMPDIR`, `HOME`, …) set before boot
   and stdout/stderr redirected into a log the app can read back.
-- **The gateway itself is downloaded after install** (~121 MB tarball → 431 MB
-  unpacked), because bundling it would blow past store size limits.
+- **The gateway itself is downloaded after install** — CI packs it to ~116 MB
+  (431 MB unpacked) and publishes a `.json` digest beside it, because bundling it
+  would blow past store size limits.
 - **It runs in-process** — the CLI's daemon mode uses `child_process`, which is
   blocked on mobile. SQLite falls back to Node's built-in `node:sqlite` or
   bundled WASM, and native addons (`sharp`, `onnxruntime-node`, …) are lazily
@@ -127,10 +128,11 @@ How it fits together:
 >
 > 1. **Nothing has run inside an Android app process yet** — that is a hardware
 >    milestone, not a code one.
-> 2. **The payload has no build job yet.** Until it does, "install" would pull
->    npm's 2.6 GB dependency tree; [docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md)
->    §5b has the replacement (upstream's own standalone build output), which the
->    installer already accepts.
+> 2. **The payload job has never been dispatched.** `omniroute-web.yml` now
+>    builds, packs, *boots* and then publishes the payload (tag `gateway-payload`,
+>    with a `.json` digest the app verifies against) — but that job is
+>    manual-only, and it has not been run yet, so no phone has downloaded what it
+>    produces. See [docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md) §5b.
 
 ## CI pipeline
 

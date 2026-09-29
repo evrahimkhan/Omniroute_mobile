@@ -31,18 +31,37 @@ export const LOCAL_GATEWAY_PORT = 20128;
 export const LOCAL_GATEWAY_URL = `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
 
 /**
- * Where the payload comes from. Published by this repo's CI, so it needs no
- * third-party host to be up. Override at build time with
- * `EXPO_PUBLIC_GATEWAY_PAYLOAD_URL` (useful for testing a local build).
+ * Where the payload comes from.
+ *
+ * A *fixed* release tag, deliberately: the app also publishes APK releases, and
+ * `releases/latest` would flip to whichever came last — so a routine APK release
+ * would break every installed app's ability to fetch the payload.
+ *
+ * Override at build time with `EXPO_PUBLIC_GATEWAY_PAYLOAD_URL` (useful for
+ * testing a local build).
  */
+const PAYLOAD_TAG = 'gateway-payload';
+const RELEASE_BASE = `https://github.com/evrahimkhan/Omniroute_mobile/releases/download/${PAYLOAD_TAG}`;
+
 export const DEFAULT_PAYLOAD_URL =
-  process.env.EXPO_PUBLIC_GATEWAY_PAYLOAD_URL ??
-  'https://github.com/evrahimkhan/Omniroute_mobile/releases/latest/download/omniroute-payload.tar.gz';
+  process.env.EXPO_PUBLIC_GATEWAY_PAYLOAD_URL ?? `${RELEASE_BASE}/omniroute-payload.tar.gz`;
 
 /**
- * Expected sha256 of the payload. Empty means "install without verification" —
- * the bootstrap warns loudly in that case, because an unverified 100+ MB
- * archive is exactly the thing you do not want to unpack blind.
+ * Where to read the expected checksum from, when the app does not pin one.
+ * CI publishes this manifest next to the archive.
+ */
+export const DEFAULT_PAYLOAD_SHA256_URL =
+  process.env.EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256_URL ?? `${RELEASE_BASE}/omniroute-payload.tar.gz.json`;
+
+/**
+ * A sha256 baked into this build, if one was given at build time.
+ *
+ * Empty by default, and that is the intended default: the payload is published
+ * independently of the app, so pinning a digest here would mean every payload
+ * update breaks every installed app. Left empty, the bootstrap instead fetches
+ * the manifest CI publishes — which catches a truncated or corrupted download
+ * (the realistic failure) but not a compromised host. Pinning protects against
+ * the latter, at the cost of having to ship a new app for each payload change.
  */
 export const PAYLOAD_SHA256 = (process.env.EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256 ?? '').trim().toLowerCase();
 
@@ -80,8 +99,10 @@ export interface GatewayState {
 export interface StartGatewayOptions {
   /** Defaults to {@link DEFAULT_PAYLOAD_URL}. */
   payloadUrl?: string;
-  /** Defaults to {@link PAYLOAD_SHA256}. */
+  /** Defaults to {@link PAYLOAD_SHA256} (usually empty). */
   payloadSha256?: string;
+  /** Defaults to {@link DEFAULT_PAYLOAD_SHA256_URL}; ignored when a digest is pinned. */
+  payloadSha256Url?: string;
   /** Reinstall even if the same payload is already installed. */
   force?: boolean;
   /** Defaults to {@link LOCAL_GATEWAY_PORT}. */
@@ -209,6 +230,7 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
 
   const payloadUrl = options.payloadUrl ?? DEFAULT_PAYLOAD_URL;
   const sha = (options.payloadSha256 ?? PAYLOAD_SHA256).trim().toLowerCase();
+  const shaUrl = options.payloadSha256Url ?? DEFAULT_PAYLOAD_SHA256_URL;
   const port = options.port ?? LOCAL_GATEWAY_PORT;
 
   const env: Record<string, string> = {
@@ -217,7 +239,10 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
     GATEWAY_HOST: '127.0.0.1',
   };
   if (payloadUrl) env.GATEWAY_PAYLOAD_URL = payloadUrl;
+  // A pinned digest wins; otherwise let the bootstrap fetch the published
+  // manifest, so a download that arrives corrupt is still caught.
   if (sha) env.GATEWAY_PAYLOAD_SHA256 = sha;
+  else if (shaUrl) env.GATEWAY_PAYLOAD_SHA256_URL = shaUrl;
   if (options.force) env.GATEWAY_FORCE_INSTALL = '1';
 
   await NodeRuntime.start({

@@ -7,7 +7,10 @@
 #   1. `build`  — npm ci + `npm run build:release` (Next.js production build +
 #                 CLI bundle) → `omniroute-build.tar.gz` workflow artifact
 #                 (contains `.build/` and `dist/`, same layout the upstream
-#                 repo's manual build workflow publishes).
+#                 repo's manual build workflow publishes), and → the
+#                 **gateway payload** the mobile app downloads and runs
+#                 on-device (self-contained standalone output, boot-checked
+#                 before it is published; see docs/LOCAL_GATEWAY.md §5b).
 #   2. `docker` — builds the upstream Dockerfile into a self-hostable gateway
 #                 image: ghcr.io/<owner>/omniroute-mobile:<sha> (and :main on
 #                 the main branch), plus Docker Hub when `dockerhub` is
@@ -35,6 +38,10 @@ on:
         description: "Build & push the Docker gateway image"
         type: boolean
         default: true
+      payload:
+        description: "Package the on-device gateway payload (the app downloads this)"
+        type: boolean
+        default: true
       dockerhub:
         description: "Also push to Docker Hub (requires DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets)"
         type: boolean
@@ -59,6 +66,9 @@ jobs:
     # move all three, so the upgrade should be a deliberate commit (bump this
     # line, run the workflows, fix what breaks) rather than a surprise.
     runs-on: ubuntu-24.04
+    permissions:
+      # Publish the gateway payload release (the app downloads it from there).
+      contents: write
     timeout-minutes: 90
     outputs:
       sha: ${{ steps.fetch.outputs.sha }}
@@ -126,6 +136,144 @@ jobs:
         with:
           name: omniroute-build-${{ steps.fetch.outputs.sha }}
           path: source/OmniRoute/omniroute-build.tar.gz
+          retention-days: 14
+
+      # =====================================================================
+      # Mobile gateway payload
+      #
+      # The app downloads this after install and runs it inside its embedded
+      # Node runtime (docs/LOCAL_GATEWAY.md §5b). It must be self-contained:
+      # the npm tarball is not, because it ships no node_modules and its
+      # `dist/server.js` does `require('next')`. Next's `output: 'standalone'`
+      # output — which this build already produces, since next.config sets
+      # `output: 'standalone'` — is the thing that is.
+      #
+      # Nothing here is published until it has been extracted and booted, so a
+      # payload that cannot serve /healthz fails the run instead of reaching
+      # someone's phone. That check is the point: the first dispatch of this job
+      # is also the first time these paths are exercised for real.
+      # =====================================================================
+      - name: Locate the standalone server
+        id: standalone
+        if: ${{ inputs.payload }}
+        working-directory: source/OmniRoute
+        run: |
+          set -uo pipefail
+          # Find it rather than assume it: the location depends on distDir and
+          # outputFileTracingRoot, both of which this project sets.
+          mapfile -t dirs < <(
+            find .build -name server.js -not -path '*/node_modules/*' -printf '%h\n' 2>/dev/null | sort -u
+          )
+          printf 'standalone candidates:\n'; printf '  %s\n' "${dirs[@]:-<none>}"
+
+          if [ "${#dirs[@]}" -eq 0 ]; then
+            echo "::error title=No standalone server output::next build did not produce output/'standalone'. Listing what it did produce, to fix this in one go."
+            find .build -maxdepth 2 -type d 2>/dev/null | head -30
+            exit 1
+          fi
+
+          # Prefer a candidate that carries its own node_modules — that is what
+          # makes the payload self-contained.
+          chosen="${dirs[0]}"
+          for dir in "${dirs[@]}"; do
+            if [ -d "$dir/node_modules" ]; then chosen="$dir"; break; fi
+          done
+          echo "chosen: $chosen"
+          if [ ! -d "$chosen/node_modules" ]; then
+            echo "::warning title=Standalone output has no node_modules::The payload will be missing dependencies; the boot check below will decide whether it is usable."
+          fi
+          # Symlinks inside a standalone tree can point at the build machine
+          # (a monorepo/workspace artifact). Count them so a failure here is
+          # interpretable rather than mysterious.
+          links=$(find "$chosen" -type l 2>/dev/null | wc -l)
+          echo "symlinks in the tree: $links"
+          echo "dir=$chosen" >> "$GITHUB_OUTPUT"
+
+      - name: Pack the gateway payload
+        id: pack
+        if: ${{ inputs.payload }}
+        working-directory: source/OmniRoute
+        run: |
+          node ../../scripts/pack-payload.mjs "${{ steps.standalone.outputs.dir }}" \
+            -o "$GITHUB_WORKSPACE/omniroute-payload.tar.gz" --entry server.js
+          # pack-payload drops a .json manifest next to the archive; publish it
+          # so the app can verify what it downloaded.
+
+      # Extract and boot exactly what the app will download, then ask it for
+      # /healthz. If this fails, the payload is not published.
+      - name: Boot the payload before publishing it
+        if: ${{ inputs.payload }}
+        run: |
+          set -uo pipefail
+          rm -rf /tmp/payload-check /tmp/payload-home /tmp/payload-tmp
+          mkdir -p /tmp/payload-check /tmp/payload-home /tmp/payload-tmp
+          tar -xzf omniroute-payload.tar.gz -C /tmp/payload-check
+
+          cd /tmp/payload-check
+          PORT=20128 HOSTNAME=127.0.0.1 \
+            HOME=/tmp/payload-home TMPDIR=/tmp/payload-tmp \
+            node server.js > /tmp/payload-boot.log 2>&1 &
+          server_pid=$!
+
+          ok=0
+          for i in $(seq 1 60); do
+            sleep 2
+            if curl -fsS --max-time 5 http://127.0.0.1:20128/healthz >/dev/null 2>&1; then
+              ok=1
+              echo "✓ the payload booted and answered /healthz after ~$((i * 2))s"
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "server exited early"
+              break
+            fi
+          done
+
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+
+          if [ "$ok" != "1" ]; then
+            {
+              echo '### The gateway payload did not boot'
+              echo '```'
+              tail -n 60 /tmp/payload-boot.log 2>/dev/null || echo '(no output)'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            excerpt=$(tail -n 12 /tmp/payload-boot.log 2>/dev/null | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3000)
+            echo "::error title=The gateway payload did not boot::${excerpt}"
+            exit 1
+          fi
+
+      - name: Publish the gateway payload
+        if: ${{ inputs.payload }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=gateway-payload
+          # A fixed tag, not `latest`: the app also publishes APK releases, and
+          # `releases/latest/download/…` would flip to whichever came last,
+          # breaking every installed app's payload URL on a routine app release.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Gateway payload (latest)" \
+              --notes "Self-contained OmniRoute build that the mobile app downloads and runs on-device. Replaced on every dispatch of the **Build OmniRoute source** workflow."
+          fi
+          gh release upload "$tag" \
+            omniroute-payload.tar.gz \
+            omniroute-payload.tar.gz.json \
+            --clobber
+          echo "published to $(gh release view "$tag" --json url --jq .url)"
+          cat omniroute-payload.tar.gz.json
+
+      - name: Upload the payload as an artifact too
+        if: ${{ inputs.payload }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: omniroute-payload-${{ steps.fetch.outputs.sha }}
+          path: |
+            omniroute-payload.tar.gz
+            omniroute-payload.tar.gz.json
           retention-days: 14
 
   docker:

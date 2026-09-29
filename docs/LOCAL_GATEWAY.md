@@ -441,6 +441,51 @@ always started from a visible screen) and OEM battery managers that kill
 foreground services (Xiaomi, Huawei and Samsung are the usual offenders) are the
 open risks.
 
+### 5f. Proving the script ran (the one bug a phone found)
+
+The first install on real hardware failed with **"The embedded runtime exited
+(code 0)"** and nothing else — no `[gateway]` line, because the card falls back
+to that wording when the log has no failure in it. Code 0, empty log, no crash.
+
+The cause was two lines at the bottom of `gateway/bootstrap.mjs`:
+
+```js
+const isDirectRun =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+```
+
+The intent — "only install and boot when this file is the program, not an
+import" — is right. The comparison is not, on Android: **Node resolves symlinks
+when it computes `import.meta.url`, but `argv[1]` keeps whatever the caller
+typed**, and Android's app-data paths are symlinks of each other (`/data/data` ⇄
+`/data/user/0`, depending on version and OEM). So the two strings differed, the
+script loaded, `main()` was never called, nothing was printed, and the process
+exited **0**. On the phone that is indistinguishable from a crash; in CI it is
+invisible, because the same file run from a normal path compares equal.
+
+The fix is in three parts, and only the first is about this bug:
+
+1. **The app says so explicitly.** `lib/gatewayInstaller.ts` passes
+   `args: [GATEWAY_RUN_FLAG]` (`--gateway-run`), and the bootstrap treats that
+   flag as "run", full stop. No filesystem question to get wrong.
+2. **The path comparison asks the filesystem.** For the documented
+   `node gateway/bootstrap.mjs`, both sides go through `realpath()`, so a
+   symlinked directory no longer decides whether the gateway starts.
+3. **The log proves the script ran.** The bootstrap's first act is to log
+   `starting on node <version>`, and `NodeRuntimeHost` writes its own
+   `[node-runtime] starting …` / `node exited with code N` around the native
+   call. An empty log now means the script never ran — a different problem from
+   one that failed, and the app says which: `describeRuntimeExit()` words an
+   exit with no `[gateway]` line as *"never ran"* rather than as a crash.
+
+Guards: `npm run payload:install-test` boots the real bootstrap **through a
+symlinked directory**, with the app's flag and without it (4 assertions; all 4
+fail against the previous two-line check). `npm run runtime:contract` asserts
+both halves of the flag handshake — the literal in the installer, the one the
+bootstrap reads — plus the `realpath` comparison and the startup banner. Layout
+of the same lesson as §5d: *if two files must agree at runtime, a checker has to
+say so*, because neither compiler can see the other language.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

@@ -34,11 +34,14 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKER = join(ROOT, 'scripts', 'pack-payload.mjs');
 const BOOTSTRAP = join(ROOT, 'gateway', 'bootstrap.mjs');
+// The flag the app passes, taken from the script that reads it: if the two ever
+// disagree, `npm run runtime:contract` fails, and these cases would fail too.
+const { RUN_FLAG } = await import(pathToFileURL(BOOTSTRAP).href);
 
 /** The payload's own server: answers /healthz and says so out loud. */
 function fixtureServer(marker) {
@@ -95,8 +98,8 @@ async function freePort() {
  * The caller does its assertions while the child is still running — a payload
  * that answers /healthz cannot answer once it has been killed.
  */
-async function bootAndRead(env, ready, timeoutMs = 60_000) {
-  const child = spawn(process.execPath, [BOOTSTRAP], {
+async function bootAndRead(env, ready, { script = BOOTSTRAP, args = [] } = {}) {
+  const child = spawn(process.execPath, [script, ...args], {
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -108,7 +111,7 @@ async function bootAndRead(env, ready, timeoutMs = 60_000) {
     output += chunk;
   });
 
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 60_000;
   let exited = false;
   child.on('exit', () => {
     exited = true;
@@ -180,11 +183,12 @@ async function main() {
   mkdirSync(home);
   mkdirSync(tmp);
 
-  const run = async (name, gatewayDir, extra) => {
+  const run = async (name, gatewayDir, extra, invocation = {}) => {
     const port = await freePort();
     const child = await bootAndRead(
       { GATEWAY_DIR: gatewayDir, GATEWAY_HOST: '127.0.0.1', GATEWAY_PORT: String(port), HOME: home, TMPDIR: tmp, ...extra },
-      (text) => text.includes('listening') || text.includes('[gateway] FAILED')
+      (text) => text.includes('listening') || text.includes('[gateway] FAILED'),
+      { args: [RUN_FLAG], ...invocation }
     );
     const output = child.output();
     // While it is still alive: does it actually serve?
@@ -217,6 +221,31 @@ async function main() {
   check('npm payload: the decoy was not executed', !second.output.includes('DECOY RAN'));
   check('npm payload: it booted and answers /healthz', second.output.includes('NPM listening') && second.servedOk === 'ok');
 
+  const linkDir = join(work, 'gateway-link');
+  symlinkSync(dirname(BOOTSTRAP), linkDir);
+  const viaLink = join(linkDir, 'bootstrap.mjs');
+
+  // --- case 4: invoked the way the app does, through a symlinked directory --
+  //
+  // Android's app-data paths are symlinks of each other, so argv[1] is not the
+  // path Node resolves for import.meta.url. Before that was handled the script
+  // loaded, did nothing and exited 0 — which the app could only report as a
+  // crash that had not happened, with an empty log to explain it.
+  const fourth = await run('symlinked+flag', install1, {}, { script: viaLink });
+  check(
+    "symlinked path: the app's run flag starts the installer anyway",
+    fourth.output.includes('gateway already installed at')
+  );
+  check('symlinked path: and the gateway boots', fourth.output.includes('STANDALONE listening') && fourth.servedOk === 'ok');
+
+  // --- case 5: the documented `node gateway/bootstrap.mjs`, same trickery ----
+  const fifth = await run('symlinked', install1, {}, { script: viaLink, args: [] });
+  check(
+    'symlinked path, no flag: the path check compares real paths, so it runs too',
+    fifth.output.includes('gateway already installed at')
+  );
+  check('symlinked path, no flag: and it boots', fifth.output.includes('STANDALONE listening') && fifth.servedOk === 'ok');
+
   // --- case 3: reinstall/restart with no URL and no checksum --------------
   const third = await run('re-run', install1, {});
   check('re-run: reuses the install without a URL', third.output.includes('gateway already installed at'));
@@ -226,7 +255,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 12;
+  const total = 16;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

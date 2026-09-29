@@ -41,6 +41,8 @@ const FILES = {
   service: join(MODULE, 'android', 'src', 'main', 'java', 'expo', 'modules', 'noderuntime', 'GatewayService.kt'),
   prefs: join(MODULE, 'android', 'src', 'main', 'java', 'expo', 'modules', 'noderuntime', 'StartPrefs.kt'),
   manifest: join(MODULE, 'android', 'src', 'main', 'AndroidManifest.xml'),
+  installer: join(ROOT, 'lib', 'gatewayInstaller.ts'),
+  bootstrap: join(ROOT, 'gateway', 'bootstrap.mjs'),
 };
 
 const sources = Object.fromEntries(
@@ -259,6 +261,42 @@ check(
   'registered for the module lifetime, because the runtime outlives a single app session'
 );
 
+// ------------------------------------------------- app ⇄ bootstrap invocation
+//
+// This handshake is the most expensive one to get wrong: when it failed on a
+// real phone the bootstrap loaded, did nothing and exited 0, so the app
+// reported a crash that had not happened and the log was empty. Both halves are
+// asserted here because neither language's compiler can see the other.
+const runFlag = sources.installer.match(/export const GATEWAY_RUN_FLAG = '([^']+)'/)?.[1];
+
+check(
+  'the app passes a run flag to the runtime',
+  Boolean(runFlag) && sources.installer.includes('args: [GATEWAY_RUN_FLAG]'),
+  'in argv, because the script path does not reliably identify the script'
+);
+
+check(
+  'the bootstrap reads the flag the app sends',
+  Boolean(runFlag) &&
+    sources.bootstrap.includes(`RUN_FLAG = '${runFlag}'`) &&
+    sources.bootstrap.includes('process.argv.includes(RUN_FLAG)'),
+  `these two spellings are the whole handshake (currently ${JSON.stringify(runFlag)})`
+);
+
+check(
+  'the bootstrap does not trust the script path alone',
+  sources.bootstrap.includes(
+    'realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))'
+  ),
+  'Node resolves symlinks for import.meta.url but not argv[1], and Android symlinks app data dirs'
+);
+
+check(
+  'the bootstrap says it started before anything can fail',
+  sources.bootstrap.includes('starting on node ${process.version}'),
+  'so an empty log means the script never ran, not that it failed silently'
+);
+
 // --------------------------------------------------------------------- report
 if (failures.length) {
   process.stderr.write(`\n✖ runtime-contract: ${failures.length} problem(s)\n`);
@@ -268,5 +306,6 @@ if (failures.length) {
 }
 
 process.stdout.write(
-  `\nruntime-contract — OK (${indexMethods.size} JS methods, ${statusFields.size} status fields, manifest checked)\n`
+  `\nruntime-contract — OK (${indexMethods.size} JS methods, ${statusFields.size} status fields, ` +
+    `manifest + bootstrap invocation checked)\n`
 );

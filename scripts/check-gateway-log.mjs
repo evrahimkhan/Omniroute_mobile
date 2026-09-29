@@ -103,7 +103,8 @@ function compile() {
 async function main() {
   const { out, file } = compile();
   try {
-    const { gatewayProgress, gatewayLogTail, describeGatewayLog } = await import(pathToFileURL(file).href);
+    const { gatewayProgress, gatewayLogTail, describeGatewayLog, gatewayNeverRan, describeRuntimeExit } =
+      await import(pathToFileURL(file).href);
 
     const failures = [];
     const check = (label, ok) => {
@@ -183,6 +184,33 @@ async function main() {
     );
     check('empty log → null', describeGatewayLog('').phase === null);
 
+    check(
+      'an empty log means the gateway script never ran',
+      gatewayNeverRan('') && gatewayNeverRan('[node-runtime] node exited with code 0')
+    );
+    check(
+      'a log with a gateway line means it did run',
+      !gatewayNeverRan('[gateway] installing…') && !gatewayNeverRan('[node-runtime] x\n[gateway] starting a')
+    );
+    check(
+      'an exit with no output is worded as "never ran", not as a crash',
+      describeRuntimeExit(0, '').includes('never ran') && describeRuntimeExit(null, '').includes('code unknown')
+    );
+    check(
+      'a missing payload says where the payload comes from',
+      (describeGatewayLog('[gateway] FAILED: Error: download failed: HTTP 404 Not Found').error ?? '')
+        .includes('Build OmniRoute web gateway')
+    );
+    check(
+      'other failures are reported verbatim',
+      describeGatewayLog('[gateway] FAILED: Error: checksum mismatch: expected a, got b').error ===
+        'Error: checksum mismatch: expected a, got b'
+    );
+    check(
+      'an exit that printed something keeps it plain',
+      describeRuntimeExit(1, '[gateway] FAILED: boom') === 'The embedded runtime exited (code 1).'
+    );
+
     check('tail keeps the end', gatewayLogTail('a\nb\nc\nd', 2) === 'c\nd');
     check('tail strips blanks', gatewayLogTail('a\n\n  \nb', 5) === 'a\nb');
 
@@ -195,7 +223,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 9} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${CASES.length * 2 + 15} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

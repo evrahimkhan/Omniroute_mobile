@@ -7,6 +7,18 @@ group = 'expo.modules.noderuntime'
 version = '0.1.0'
 
 android {
+  // A module that compiles C++ has to build with the same NDK as the app,
+  // otherwise Gradle goes looking for AGP's default NDK version, which is
+  // usually not the one the SDK has installed. expo-modules-core sets these the
+  // same way; the `hasProperty` guards are theirs, because the root project only
+  // defines them when the app does.
+  if (rootProject.hasProperty("ndkPath")) {
+    ndkPath rootProject.ext.ndkPath
+  }
+  if (rootProject.hasProperty("ndkVersion")) {
+    ndkVersion rootProject.ext.ndkVersion
+  }
+
   namespace "expo.modules.noderuntime"
   defaultConfig {
     versionCode 1

@@ -304,7 +304,7 @@ export default function LocalGatewayCard({ onUse }: Props) {
         </Text>
       ) : null}
 
-      {phase === 'failed' ? (
+      {phase === 'failed' && state?.runtimeExited ? (
         <Text style={styles.note}>
           Close and reopen the app to try again — the embedded runtime can only start once per
           app session. That is a limitation of the runtime, not of the gateway.

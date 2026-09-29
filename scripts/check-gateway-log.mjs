@@ -207,6 +207,18 @@ async function main() {
         'Error: checksum mismatch: expected a, got b'
     );
     check(
+      'an exit after the script was handed over says the script printed nothing',
+      describeRuntimeExit(0, '[node-runtime] starting node v24.20.0: /x/bootstrap.mjs').includes(
+        'printed nothing'
+      )
+    );
+    check(
+      'an exit with no runtime marker says the script was never started',
+      describeRuntimeExit(0, '[0929/175611:INFO:android_webview] seed loader noise').includes(
+        'without starting the gateway script'
+      )
+    );
+    check(
       'an exit that printed something keeps it plain',
       describeRuntimeExit(1, '[gateway] FAILED: boom') === 'The embedded runtime exited (code 1).'
     );
@@ -223,7 +235,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 15} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${CASES.length * 2 + 17} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

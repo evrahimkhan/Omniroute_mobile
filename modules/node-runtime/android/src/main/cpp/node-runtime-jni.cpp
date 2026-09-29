@@ -99,6 +99,13 @@ std::vector<std::string> toStringVector(JNIEnv *env, jobjectArray array) {
   return out;
 }
 
+/** The descriptors the app had before the redirect, so they can be restored. */
+int g_savedStdout = -1;
+int g_savedStderr = -1;
+
+/** Defined below, next to the redirect it undoes. */
+void restoreStdio();
+
 /** Point fd 1 and fd 2 at a file, so the runtime's output survives. */
 bool redirectStdioTo(const std::string &path) {
   int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -106,9 +113,12 @@ bool redirectStdioTo(const std::string &path) {
     LOGE("cannot open log file %s: %s", path.c_str(), strerror(errno));
     return false;
   }
+  g_savedStdout = dup(STDOUT_FILENO);
+  g_savedStderr = dup(STDERR_FILENO);
   if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
     LOGE("dup2 failed: %s", strerror(errno));
     close(fd);
+    restoreStdio();
     return false;
   }
   if (fd > STDERR_FILENO) close(fd);
@@ -116,6 +126,29 @@ bool redirectStdioTo(const std::string &path) {
   setvbuf(stdout, nullptr, _IOLBF, 0);
   setvbuf(stderr, nullptr, _IONBF, 0);
   return true;
+}
+
+/**
+ * Put the app's own stdout/stderr back once the runtime is over.
+ *
+ * The redirect is process-wide, so leaving it in place means everything else in
+ * the app that writes to stderr keeps landing in the runtime log — Android
+ * WebView most visibly, which logs a steady stream of its own. That is how a
+ * file meant to hold a crash report filled with browser chatter *after* node had
+ * already exited, and it is why the app now keeps the gateway's own log
+ * separately (`gateway.log`).
+ */
+void restoreStdio() {
+  if (g_savedStdout >= 0) {
+    dup2(g_savedStdout, STDOUT_FILENO);
+    close(g_savedStdout);
+    g_savedStdout = -1;
+  }
+  if (g_savedStderr >= 0) {
+    dup2(g_savedStderr, STDERR_FILENO);
+    close(g_savedStderr);
+    g_savedStderr = -1;
+  }
 }
 
 }  // namespace
@@ -188,6 +221,7 @@ Java_expo_modules_noderuntime_NodeRuntimeNative_nativeStart(
 
   const int exitCode = node::Start(static_cast<int>(argStrings.size()), argv.data());
 
+  restoreStdio();
   for (char *arg : argv) free(arg);
   LOGI("node exited with code %d", exitCode);
   return exitCode;

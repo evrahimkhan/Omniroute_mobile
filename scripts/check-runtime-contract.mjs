@@ -269,6 +269,35 @@ check(
 // asserted here because neither language's compiler can see the other.
 const runFlag = sources.installer.match(/export const GATEWAY_RUN_FLAG = '([^']+)'/)?.[1];
 
+// The same class of agreement as the flag: two files, two languages, one file
+// name. The card reads what the bootstrap writes, so a rename on one side would
+// show up as "the gateway printed nothing" — the failure this whole section
+// exists to make impossible.
+const gatewayLogName = sources.bootstrap.match(/const GATEWAY_LOG_NAME = '([^']+)'/)?.[1];
+const installerLogName = sources.installer.match(/const GATEWAY_LOG_FILE = '([^']+)'/)?.[1];
+
+check(
+  'both sides agree on the gateway log file name',
+  Boolean(gatewayLogName) && gatewayLogName === installerLogName,
+  `the bootstrap writes it and the app reads it (bootstrap ${JSON.stringify(
+    gatewayLogName
+  )}, app ${JSON.stringify(installerLogName)})`
+);
+
+check(
+  'the bootstrap writes its own log, not just stdout',
+  sources.bootstrap.includes('appendToGatewayLog(line)') &&
+    sources.bootstrap.includes('writeFileSync(file, \'\')'),
+  'a file only the gateway writes cannot be buried by the app\'s other output'
+);
+
+check(
+  'the app reads that file, and filters the runtime log',
+  sources.installer.includes('NodeRuntime.readFile(gatewayLogPath(), maxBytes)') &&
+    sources.installer.includes("RUNTIME_LOG_MARKER = '[node-runtime]'"),
+  'the firehose stays for crash reports; it no longer decides what the card says'
+);
+
 check(
   'the app passes a run flag to the runtime',
   Boolean(runFlag) && sources.installer.includes('args: [GATEWAY_RUN_FLAG]'),
@@ -307,5 +336,5 @@ if (failures.length) {
 
 process.stdout.write(
   `\nruntime-contract — OK (${indexMethods.size} JS methods, ${statusFields.size} status fields, ` +
-    `manifest + bootstrap invocation checked)\n`
+    `manifest, bootstrap invocation + logs checked)\n`
 );

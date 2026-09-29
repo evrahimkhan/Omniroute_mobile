@@ -117,6 +117,13 @@ export interface GatewayState {
   logTail: string;
   /** Present when the phase is `failed`. */
   error?: string;
+  /**
+   * The runtime started and is over. Distinguishes "node is done, so this
+   * process can never host again" from a failure that has nothing to do with
+   * the runtime — an install that could not download, say — where telling the
+   * user to reopen the app would be wrong advice.
+   */
+  runtimeExited: boolean;
   /** The URL to point the WebView at once the phase is `ready`. */
   url: string;
 }
@@ -233,6 +240,7 @@ export async function gatewayState(): Promise<GatewayState> {
       installed: false,
       installedAt: null,
       keepAlive: false,
+      runtimeExited: false,
       logTail: '',
       error: localGatewayUnavailableReason() ?? undefined,
       url,
@@ -251,6 +259,7 @@ export async function gatewayState(): Promise<GatewayState> {
       installed: Boolean(marker),
       installedAt: marker?.installedAt ?? null,
       keepAlive: false,
+      runtimeExited: Boolean(status.exited),
       logTail: log,
       error: fromLog.error ?? describeRuntimeExit(status.exitCode, log),
       url,
@@ -267,6 +276,7 @@ export async function gatewayState(): Promise<GatewayState> {
     installed: Boolean(marker),
     installedAt: marker?.installedAt ?? null,
     keepAlive,
+    runtimeExited: Boolean(status.exited),
     logTail: log,
     url,
   };
@@ -337,6 +347,11 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
   if (sha) env.GATEWAY_PAYLOAD_SHA256 = sha;
   else if (shaUrl) env.GATEWAY_PAYLOAD_SHA256_URL = shaUrl;
   if (options.force) env.GATEWAY_FORCE_INSTALL = '1';
+
+  // Empty the log before starting, so the card can never show a previous
+  // attempt's failure as this one's — including when the runtime starts and
+  // produces no output at all, which is the case that has no other signal.
+  await NodeRuntime.writeFile(gatewayLogPath(), '');
 
   await NodeRuntime.start({
     scriptPath,

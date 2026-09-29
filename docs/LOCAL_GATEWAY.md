@@ -486,6 +486,45 @@ bootstrap reads — plus the `realpath` comparison and the startup banner. Layou
 of the same lesson as §5d: *if two files must agree at runtime, a checker has to
 say so*, because neither compiler can see the other language.
 
+### 5g. Which log the card reads, and why it is not the runtime's
+
+`node.log` is a **process-wide** capture: the runtime has no console on Android,
+so the JNI layer points fds 1 and 2 at a file before `node::Start`, and that
+file then collects whatever *anything* in the app writes to stdout/stderr.
+Android WebView logs a steady stream of its own. The first real device log the
+card showed was three lines of `variations_seed_loader` chatter and no gateway
+output at all.
+
+That is not just untidy. `readGatewayLog` reads the last 64 KB, the card shows
+the last 14 lines of it, and `gatewayNeverRan()` falls back to *"The embedded
+runtime exited (code 0)"* when no `[gateway]` line is in that window — so a few
+hundred KB of browser noise can push a real `[gateway] FAILED: …` out of view
+and make an install that failed for a specific reason look like one that never
+ran. Which is what happened, twice, on a phone.
+
+The fix separates the two questions:
+
+  - **`gateway.log`**, written by the bootstrap itself (`appendFileSync`, so it
+    cannot be lost to a buffer) and truncated at the start of every run. Only
+    the gateway writes it, so nothing can bury its lines. `log()` and `fatal()`
+    both go there, and `describeRuntimeExit()` reads the same file.
+  - **`node.log`** stays the firehose, for crash reports, and the app takes only
+    the `[node-runtime]` lines from it — the markers that say whether the script
+    was handed to the runtime and how node ended.
+  - The app empties `gateway.log` before each attempt, so a previous failure can
+    never be shown as this attempt's — including when the runtime produces no
+    output at all, which is the case with no other signal.
+  - `restoreStdio()` puts the app's own descriptors back when `node::Start`
+    returns, so the firehose stops growing with unrelated app output once the
+    runtime is over. (The WebView lines on the phone were timestamped *after*
+    the exit, which is how this was noticed.)
+
+`readGatewayLog()` is therefore two sources: the gateway's own log, then the
+runtime's markers. Guards: `payload:install-test` asserts the file exists, names
+the run, and receives failures too (19 assertions); `runtime:contract` asserts
+that both languages name the same file, that the bootstrap writes it and that the
+app reads it — the same handshake class as the run flag in §5f.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

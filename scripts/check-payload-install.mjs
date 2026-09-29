@@ -31,7 +31,15 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -42,6 +50,7 @@ const BOOTSTRAP = join(ROOT, 'gateway', 'bootstrap.mjs');
 // The flag the app passes, taken from the script that reads it: if the two ever
 // disagree, `npm run runtime:contract` fails, and these cases would fail too.
 const { RUN_FLAG } = await import(pathToFileURL(BOOTSTRAP).href);
+const GATEWAY_LOG_NAME = 'gateway.log';
 
 /** The payload's own server: answers /healthz and says so out loud. */
 function fixtureServer(marker) {
@@ -252,10 +261,35 @@ async function main() {
   check('re-run: still resolves the standalone entry', third.output.includes('starting server.js on 127.0.0.1:'));
   check('re-run: boots again', third.output.includes('STANDALONE listening') && third.servedOk === 'ok');
 
+  // --- case 6: the log the app actually reads -------------------------------
+  //
+  // The card reads `gateway.log`, written by the bootstrap itself, because the
+  // runtime log is a process-wide stdout/stderr capture that also collects
+  // Android WebView's chatter. If that file is missing or stale, the app cannot
+  // tell an install that failed from one that never ran.
+  const logText = existsSync(join(install1, GATEWAY_LOG_NAME))
+    ? readFileSync(join(install1, GATEWAY_LOG_NAME), 'utf8')
+    : '';
+  check('the gateway writes its own log next to the install', logText.includes('[gateway]'));
+  check(
+    'that log names the run, so a stale one is recognisable',
+    /\[gateway\] starting on node v\d+/.test(logText)
+  );
+
+  const failedDir = join(work, 'install-none');
+  await run('failure', failedDir, {});
+  const failedText = existsSync(join(failedDir, GATEWAY_LOG_NAME))
+    ? readFileSync(join(failedDir, GATEWAY_LOG_NAME), 'utf8')
+    : '';
+  check(
+    'a failure is written to that log too, so the card can explain it',
+    failedText.includes('[gateway] FAILED:')
+  );
+
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 16;
+  const total = 19;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

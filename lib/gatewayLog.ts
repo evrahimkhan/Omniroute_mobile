@@ -154,10 +154,16 @@ export function gatewayNeverRan(log: string): boolean {
 export function describeRuntimeExit(exitCode: number | null, log: string): string {
   const code = `code ${exitCode ?? 'unknown'}`;
   if (!gatewayNeverRan(log)) return `The embedded runtime exited (${code}).`;
+  if (log.includes('[node-runtime]')) {
+    return (
+      `The embedded runtime exited (${code}) after starting the gateway script, which printed ` +
+      `nothing at all — the script in the app and the runtime's view of it disagree. This is a ` +
+      `bug, not a bad download: reopen the app and try again.`
+    );
+  }
   return (
-    `The embedded runtime exited (${code}) without the gateway script printing anything, ` +
-    `so the gateway never ran. Reopen the app and try again — see the gateway log for what the ` +
-    `runtime reported.`
+    `The embedded runtime exited (${code}) without starting the gateway script, so the gateway ` +
+    `never ran. Reopen the app and try again.`
   );
 }
 

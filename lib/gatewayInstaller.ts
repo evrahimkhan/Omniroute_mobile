@@ -396,7 +396,12 @@ export interface WaitForGatewayOptions {
 export async function waitForLocalGateway(
   options: WaitForGatewayOptions = {}
 ): Promise<string> {
-  const { timeoutMs = 20 * 60 * 1000, intervalMs = 1000, onProgress, shouldContinue } = options;
+  // Generous on purpose: a first install downloads the published payload and
+  // unpacks ~44,000 files, which takes minutes even on good Wi-Fi and much
+  // longer on a phone that is also doing something else. The caller can stop
+  // waiting at any time (the install itself carries on), so a long window costs
+  // nothing except a spinner that stays up.
+  const { timeoutMs = 45 * 60 * 1000, intervalMs = 1000, onProgress, shouldContinue } = options;
   const deadline = Date.now() + timeoutMs;
   let lastState: GatewayState | null = null;
 

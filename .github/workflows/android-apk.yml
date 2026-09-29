@@ -92,16 +92,35 @@ jobs:
           so=modules/node-runtime/android/src/main/jniLibs/arm64-v8a/libnode.so
           ls -la "$(dirname "$so")"
           readelf -h "$so" | grep -E 'Class:|Machine:|Type:' || true
+          syms=$(readelf -sW --dyn-syms "$so")
           # $7 is the Ndx column: UND means the symbol is only referenced, not
           # provided — which is exactly the case that would fail the link.
-          if readelf -sW --dyn-syms "$so" \
-               | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}' \
-               | grep -qx '_ZN4node5StartEiPPc'; then
+          defined=$(printf '%s\n' "$syms" | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}')
+          echo "defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
+
+          if printf '%s\n' "$defined" | grep -qx '_ZN4node5StartEiPPc'; then
             echo "✓ libnode.so exports node::Start"
-          else
-            echo "::error title=libnode.so does not export node::Start::The JNI shim calls node::Start, so the link step cannot succeed with this artifact."
-            exit 1
+            exit 0
           fi
+
+          # Dump enough to tell the possible causes apart: symbol absent
+          # entirely, hidden by a version script, or stripped.
+          {
+            echo "the fetched libnode.so does not define node::Start"
+            echo "-- any mention of it (0 means absent, UND means referenced only):"
+            printf '%s\n' "$syms" | grep 'node5Start' | head -5
+            echo "-- defined symbols matching 'Start' (mangled):"
+            printf '%s\n' "$defined" | grep -i 'start' | head -20
+            echo "-- node-namespace symbols, first 25:"
+            printf '%s\n' "$defined" | grep '^_ZN4node' | head -25
+            echo "-- napi_/node_api_ defined count: $(printf '%s\n' "$defined" | grep -cE '^(napi_|node_api_)' || true)"
+            echo "-- other node-ish entry points:"
+            printf '%s\n' "$defined" | grep -iE 'startnode|nodeinstance|start\.|embed|initializ' | head -15
+          } > /tmp/symdump.txt
+          cat /tmp/symdump.txt
+          # One annotation, because GitHub only surfaces a handful per step.
+          echo "::error title=libnode.so does not export node::Start::$(sed ':a;N;$!ba;s/\n/%0A/g' /tmp/symdump.txt | cut -c1-4000)"
+          exit 1
 
       - name: Setup Java 17
         uses: actions/setup-java@v6

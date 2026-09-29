@@ -52,6 +52,13 @@ jobs:
       - name: Lint workflow files
         run: node scripts/check-workflows.mjs
 
+      # The app ships gateway/bootstrap.mjs as an embedded string, because the
+      # script *is* the installer and cannot download itself. Editing the script
+      # without regenerating that constant would silently keep shipping the old
+      # installer, so fail here instead.
+      - name: Check the embedded gateway bootstrap is current
+        run: node scripts/embed-gateway-bootstrap.mjs --check
+
       - name: Typecheck
         run: npx tsc --noEmit
 

@@ -104,13 +104,25 @@ How it fits together:
   bundled WASM, and native addons (`sharp`, `onnxruntime-node`, …) are lazily
   imported behind `try/catch`, so their absence degrades features rather than
   breaking the server.
+- **Installing happens inside the runtime, not in the app.**
+  `gateway/bootstrap.mjs` downloads the payload, verifies its checksum, unpacks
+  it, and boots it — the runtime already has `fetch`/`crypto`/`zlib`, so the app
+  needs no download manager or unzipper. It is embedded into the bundle as a
+  string by `npm run gateway:embed` (CI fails if that constant is stale), and it
+  has to boot the server as well, because the runtime starts only once per app
+  process.
+- **The app's side is small** (`lib/gatewayInstaller.ts`): write the script,
+  start the runtime on it, then poll `/healthz` until the gateway answers — so
+  the URL saved into settings is one that actually responds.
 
-> Status: Phase 1 (runtime packaging) and Phase 2 (the JNI bridge) are
-> implemented; the install flow and the UI land in the following phases. The
-> bridge is verified as far as a machine without a phone can verify it — the
-> shim compiles against the real Node headers, links, and exports the symbols
-> Kotlin calls, and CI exercises that with the NDK on every APK build — but
-> **nothing has booted the runtime inside a real Android process yet**.
+> Status: phases 1–3 (runtime packaging, the JNI bridge, and the install flow)
+> are implemented; the UI lands next. Everything a machine without a phone can
+> verify *is* verified — CI compiles the native code with the NDK and checks what
+> the APK contains, and the installer was exercised end to end against the real
+> published payload (byte-identical to system `tar`, then a real boot) — but
+> **nothing has yet run inside an Android app process**, and the payload is still
+> npm's 2.6 GB tree rather than the standalone build planned in
+> [docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md) §5b.
 
 ## CI pipeline
 

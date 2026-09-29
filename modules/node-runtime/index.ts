@@ -12,6 +12,7 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
 import type {
+  NodePaths,
   NodeRuntimeEvents,
   NodeRuntimeStatus,
   StartOptions,
@@ -26,6 +27,18 @@ declare class NodeRuntimeModule extends NativeModule<NodeRuntimeEvents> {
   getRuntimeVersion(): string;
   /** Current lifecycle state. */
   getStatus(): NodeRuntimeStatus;
+  /** Directories the app may use for the gateway. */
+  getPaths(): NodePaths;
+  /**
+   * Minimal filesystem access, because React Native has none of its own and the
+   * app needs to write the gateway's bootstrap script and read its install
+   * marker. Paths outside the app's own storage are rejected.
+   */
+  fileExists(path: string): boolean;
+  writeFile(path: string, contents: string): Promise<string>;
+  /** File contents, or `null` when it does not exist. Reads the tail past `maxBytes`. */
+  readFile(path: string, maxBytes: number): Promise<string | null>;
+  deleteDir(path: string): Promise<boolean>;
   /**
    * Start the runtime. Resolves once the thread is up — not once the gateway
    * inside it is listening; poll the gateway URL for that.
@@ -42,4 +55,4 @@ declare class NodeRuntimeModule extends NativeModule<NodeRuntimeEvents> {
 
 export default requireNativeModule<NodeRuntimeModule>('NodeRuntime');
 
-export type { NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };
+export type { NodePaths, NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };

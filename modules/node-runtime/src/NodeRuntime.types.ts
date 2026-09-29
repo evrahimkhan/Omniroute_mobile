@@ -46,6 +46,19 @@ export interface NodeExitEvent {
   scriptPath: string;
 }
 
+/**
+ * Directories the app may write to. `gatewayDir` is where the local gateway
+ * lives (payload, bootstrap script, log); `nativeLibraryDir` is where Android
+ * extracted the runtime, and is readable but not writable.
+ */
+export interface NodePaths {
+  filesDir: string;
+  cacheDir: string;
+  gatewayDir: string;
+  logFilePath: string;
+  nativeLibraryDir: string;
+}
+
 export type NodeRuntimeEvents = {
   onExit: (event: NodeExitEvent) => void;
 };

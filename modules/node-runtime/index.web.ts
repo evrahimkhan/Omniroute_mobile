@@ -7,7 +7,12 @@
  * scope), so "unavailable" is the honest answer here.
  */
 
-import type { NodeRuntimeEvents, NodeRuntimeStatus, StartOptions } from './src/NodeRuntime.types';
+import type {
+  NodePaths,
+  NodeRuntimeEvents,
+  NodeRuntimeStatus,
+  StartOptions,
+} from './src/NodeRuntime.types';
 
 const STATUS: NodeRuntimeStatus = {
   available: false,
@@ -32,6 +37,19 @@ const stub = {
   },
   readLog: async (_maxBytes: number): Promise<string> => '',
   clearLog: async (): Promise<void> => {},
+  getPaths: (): NodePaths => ({
+    filesDir: '',
+    cacheDir: '',
+    gatewayDir: '',
+    logFilePath: '',
+    nativeLibraryDir: '',
+  }),
+  fileExists: () => false,
+  writeFile: async (): Promise<string> => {
+    throw new Error('The embedded Node runtime is not available on web.');
+  },
+  readFile: async (): Promise<string | null> => null,
+  deleteDir: async (): Promise<boolean> => false,
   addListener: () => ({ remove: () => {} }),
   removeAllListeners: () => {},
 } satisfies Record<string, unknown>;
@@ -44,6 +62,11 @@ export default stub as unknown as {
   start(options: StartOptions): Promise<NodeRuntimeStatus>;
   readLog(maxBytes: number): Promise<string>;
   clearLog(): Promise<void>;
+  getPaths(): NodePaths;
+  fileExists(path: string): boolean;
+  writeFile(path: string, contents: string): Promise<string>;
+  readFile(path: string, maxBytes: number): Promise<string | null>;
+  deleteDir(path: string): Promise<boolean>;
 } & NodeRuntimeEvents;
 
-export type { NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };
+export type { NodePaths, NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };

@@ -80,6 +80,32 @@ class NodeRuntimeModule : Module() {
 
     Function("getStatus") { status() }
 
+    Function("getPaths") { appPaths() }
+
+    Function("fileExists") { path: String -> appFile(path).exists() }
+
+    AsyncFunction("writeFile") { path: String, contents: String ->
+      val file = appFile(path)
+      file.parentFile?.mkdirs()
+      file.writeText(contents)
+      file.absolutePath
+    }
+
+    AsyncFunction("readFile") { path: String, maxBytes: Int ->
+      val file = appFile(path)
+      if (!file.isFile) {
+        null
+      } else {
+        val limit = maxBytes.coerceIn(1, MAX_FILE_BYTES)
+        if (file.length() <= limit) file.readText() else tailOf(file, limit)
+      }
+    }
+
+    AsyncFunction("deleteDir") { path: String ->
+      val dir = appFile(path)
+      if (dir.exists()) dir.deleteRecursively() else true
+    }
+
     AsyncFunction("start") { options: Map<String, Any?> -> startRuntime(options) }
 
     AsyncFunction("readLog") { maxBytes: Int -> readLog(maxBytes) }
@@ -91,7 +117,54 @@ class NodeRuntimeModule : Module() {
     appContext.reactContext ?: throw NodeRuntimeStartException("No Android context available")
 
   private fun logPath(context: Context) =
-    File(File(context.filesDir, DIR_NAME), LOG_FILE_NAME).absolutePath
+    File(gatewayDir(context), LOG_FILE_NAME).absolutePath
+
+  private fun gatewayDir(context: Context) = File(context.filesDir, DIR_NAME)
+
+  private fun appPaths(): Map<String, Any?> {
+    val context = appContextOrThrow()
+    return mapOf(
+      "filesDir" to context.filesDir.absolutePath,
+      "cacheDir" to context.cacheDir.absolutePath,
+      "gatewayDir" to gatewayDir(context).absolutePath,
+      "logFilePath" to logPath(context),
+      "nativeLibraryDir" to context.applicationInfo.nativeLibraryDir
+    )
+  }
+
+  /**
+   * Resolve a path the app asked for, and refuse anything outside the app's own
+   * storage. The app only ever passes paths it got from `getPaths()`, so a path
+   * outside those roots means a bug — or something feeding us a path.
+   *
+   * Relative paths resolve against `filesDir`.
+   */
+  private fun appFile(path: String): File {
+    val context = appContextOrThrow()
+    val candidate = File(path).let { if (it.isAbsolute) it else File(context.filesDir, path) }
+    val canonical = try {
+      candidate.canonicalFile
+    } catch (t: Throwable) {
+      throw NodeRuntimeStartException("Unusable path: $path")
+    }
+    val allowed = listOf(context.filesDir, context.cacheDir).any { root ->
+      val rootPath = root.canonicalFile.path
+      canonical.path == rootPath || canonical.path.startsWith(rootPath + File.separator)
+    }
+    if (!allowed) {
+      throw NodeRuntimeStartException("Path is outside the app's storage: $path")
+    }
+    return canonical
+  }
+
+  /** Last [limit] bytes of a file, as text — for reading long logs efficiently. */
+  private fun tailOf(file: File, limit: Int): String = RandomAccessFile(file, "r").use { raf ->
+    val start = if (raf.length() > limit) raf.length() - limit else 0L
+    val buffer = ByteArray((raf.length() - start).toInt())
+    raf.seek(start)
+    raf.readFully(buffer)
+    String(buffer, Charsets.UTF_8)
+  }
 
   private fun status(): Map<String, Any?> {
     val context = appContext.reactContext
@@ -195,15 +268,7 @@ class NodeRuntimeModule : Module() {
       ?: throw NodeRuntimeStartException("No Android context available")
     val file = File(logPath(context))
     if (!file.isFile) return ""
-    val limit = maxBytes.coerceIn(1, MAX_LOG_BYTES)
-    return RandomAccessFile(file, "r").use { raf ->
-      val length = raf.length()
-      val start = if (length > limit) length - limit else 0L
-      val buffer = ByteArray((length - start).toInt())
-      raf.seek(start)
-      raf.readFully(buffer)
-      String(buffer, Charsets.UTF_8)
-    }
+    return tailOf(file, maxBytes.coerceIn(1, MAX_LOG_BYTES))
   }
 
   private fun clearLog() {
@@ -229,6 +294,7 @@ class NodeRuntimeModule : Module() {
     private const val MIN_STACK_MB = 2
     private const val MAX_STACK_MB = 64
     private const val MAX_LOG_BYTES = 8 * 1024 * 1024
+    private const val MAX_FILE_BYTES = 32 * 1024 * 1024
     /** Kept in sync with `FAILED_TO_START` in node-runtime-jni.cpp. */
     private const val FAILED_TO_START = -1
   }

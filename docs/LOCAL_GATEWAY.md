@@ -1,6 +1,6 @@
 # Local Gateway — hosting the npm OmniRoute inside the app
 
-Status: **Phase 2 (JNI bridge) — implemented, unverified on hardware.**
+Status: **Phase 3 (install flow) — implemented, unverified on hardware.**
 Goal: after installing the APK, the user taps *Install local gateway* and the app
 sets up OmniRoute **on the phone** — no separate server, no Termux, nothing bundled
 in the APK except a JavaScript runtime.
@@ -62,25 +62,30 @@ WebView over a gateway URL. So "the app hosts it" reduces to:
 ```
 ┌─────────────────────────── Android app (APK) ───────────────────────────┐
 │                                                                         │
-│  libnode.so  (Node 24.20.0, arm64-v8a)   ← bundled in jniLibs,          │
-│                                            extractNativeLibs=true       │
+│  libnode.so  (Node 24.20.0, per-ABI)   ← in jniLibs, extractNativeLibs   │
+│  libnoderuntime_jni.so                 ← the JNI shim, built from source │
 │                                                                         │
-│  JNI bridge (Kotlin ⇄ C++)  → starts libnode as a thread, runs a script  │
+│  modules/node-runtime   Kotlin NodeRuntime ⇄ C++ node::Start on a thread │
 │                                                                         │
-│  app storage (downloaded after install, ~121 MB):                       │
-│    files/gateway/pkg/…        omniroute@3.8.50 unpacked                 │
-│    files/gateway/data/        DATA_DIR (DB, keys)                       │
+│  app storage:                                                           │
+│    files/node-runtime/bootstrap.mjs   the installer (embedded as a       │
+│                                       string in the JS bundle)          │
+│    files/node-runtime/node.log        runtime stdout/stderr → app reads  │
+│    files/node-runtime/app/            payload, downloaded after install  │
+│    <HOME>/.omniroute/                 gateway state (DB, secrets)        │
+│                                       ← HOME is filesDir, set pre-boot  │
 │                                                                         │
-│  runtime script: import dist/server.js in-process, PORT=20128,          │
-│                  HOSTNAME=127.0.0.1                                     │
+│  lib/gatewayInstaller.ts → writes the script, starts it, polls /healthz  │
 │                                                                         │
-│  WebView (existing)  →  http://127.0.0.1:20128                          │
+│  WebView (existing)  →  http://127.0.0.1:20128  (+ its own 20131/20132)  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Sizes: runtime ≈ 25–30 MB per ABI (the 74 MB zip carries three), OmniRoute
-tarball 121 MB compressed / 431 MB unpacked / 21,898 files — hence the
-"install after the APK" flow rather than shipping it.
+Sizes: runtime ≈ 18 MB per ABI in the APK. The payload is the open item —
+npm's full tree is 2.6 GB, which the standalone build in §5b is meant to
+replace — hence the "install after the APK" flow rather than shipping it.
+
+
 
 ### Why not the alternatives
 
@@ -99,7 +104,7 @@ tarball 121 MB compressed / 431 MB unpacked / 21,898 files — hence the
   `libnode.so` per ABI into `modules/node-runtime/android/src/main/jniLibs/<abi>/`,
   plus the public headers into `.../src/main/cpp/include/`. CI asserts the built
   APK really contains the library.
-- **Phase 2 — JNI bridge (this change).** Local Expo module `modules/node-runtime`:
+- **Phase 2 — JNI bridge (done).** Local Expo module `modules/node-runtime`:
   Kotlin `NodeRuntime` over a C++ shim (`node-runtime-jni.cpp`) that starts
   libnode with `node::Start` on a dedicated thread. See §5a for the contract.
   The *mechanics* are verified off-device (the shim compiles against the real
@@ -107,11 +112,18 @@ tarball 121 MB compressed / 431 MB unpacked / 21,898 files — hence the
   this with the NDK on every build), but **nothing here has run on a phone yet**:
   whether the runtime actually boots inside an Android app process is the open
   question.
-- **Phase 3 — install flow.** Download the tarball, verify the integrity hash,
-  extract, write the bootstrap script, start, poll `/healthz`, save the URL.
-  **Blocked on a discovery that changes the plan — see §5b.**
-- **Phase 4 — UI/UX.** "Local gateway" card in Settings/onboarding: install
-  progress, start/stop, data wipe, and honest messaging about degraded features.
+- **Phase 3 — install flow (this change).** `gateway/bootstrap.mjs` downloads
+  the payload, verifies its checksum, unpacks it, and boots it — all inside the
+  embedded runtime, so the app needs no download manager or unzipper. The app
+  side (`lib/gatewayInstaller.ts`) writes that script into app storage, starts
+  the runtime on it, and polls `/healthz` until the gateway actually answers.
+  The payload itself is still npm's 2.6 GB tree until the standalone build lands
+  — see §5b for what that means and what replaces it.
+- **Phase 4 — UI/UX (not started).** "Local gateway" card in Settings/onboarding:
+  install progress, start/stop, data wipe, and honest messaging about degraded
+  features. `lib/gatewayInstaller.ts` exposes what it needs (`gatewayState()`,
+  `startLocalGateway()`, `waitForLocalGateway()` with a progress callback, and
+  `uninstallLocalGateway()`).
 
 ### 5a. The Phase 2 module contract
 
@@ -172,33 +184,110 @@ What CI proves on every APK build: the archive downloads, the runtime exports
 ABIs, and the resulting APK contains `lib/<abi>/libnode.so` **and**
 `lib/<abi>/libnoderuntime_jni.so`. What it cannot prove is that any of it runs.
 
-### 5b. Phase 3 blocker: the tarball has no dependencies
+### 5b. The payload: what "installing" means
 
-Verified against the published `omniroute@3.8.50` tarball: it contains **zero
-`node_modules` entries**, and `dist/server.js` does `require('next')`,
+The published `omniroute@3.8.50` tarball contains **zero `node_modules`
+entries**, and `dist/server.js` does `require('next')`,
 `require('next/dist/server/lib/start-server')` and `require('./http-method-guard.cjs')`.
 `dist/.build/next/` holds `BUILD_ID`, the route manifests, `server/` and
-`static/` — but it is **not** a Next.js standalone output (no
-`standalone/server.js`, no vendored modules), so importing `dist/server.js`
-alone cannot boot. `bin/cli/commands/serve.mjs` has no in-process branch either:
-it `spawn`s a child process in both `runDaemon()` and `runWithoutRecovery()`,
-which is exactly what we cannot do.
+`static/`, but it is **not** a Next.js standalone output, so the tarball alone
+cannot boot. `bin/cli/commands/serve.mjs` is no help either: it `spawn`s a child
+process in both `runDaemon()` and `runWithoutRecovery()`, which is exactly what
+Android does not let a mobile runtime do.
 
-So Phase 3 needs one of:
+**The runtime itself is fine.** Booted directly, with the dependency tree
+present, `dist/server.js` comes up in-process on Node 24, runs its migrations,
+answers `/healthz`, `/api/health/ping`, `/api/health`, `/dashboard`,
+`/api/providers` and `/api/models`, and shuts down gracefully on SIGTERM. It
+also opens two extra loopback ports of its own (20131 for the embed WS proxy,
+20132 for the live dashboard WebSocket) and keeps its state under `$HOME`, which
+is why the JNI bridge sets `HOME` to the app's files dir.
 
-1. **Install dependencies on-device** — run npm (or an equivalent resolver)
-   inside the app against the registry after unpacking. Honest costs: a network
-   round-trip for ~77 dependencies, meaningful disk (431 MB unpacked before
-   `--omit=dev` prunes anything), and time; needs a real resolution strategy for
-   the optional native deps that cannot build on Android.
-2. **Publish a self-contained payload** — a `next build`-style output with the
-   server dependency tree vendored in, which the app downloads as one archive.
-   Puts the work in CI instead of on the phone, and is the only option that
-   works offline.
+So the only question is where the dependency tree comes from. Measured, both
+ways:
 
-Either way the payload budget is the 431.6 MB / 21,898 files already measured.
-This is a Phase 3 decision, not a Phase 2 one — but it must be settled before
-the install flow is written, because it decides what "installing" means.
+| | Size | Files | Where the work happens |
+|---|---|---|---|
+| Full npm tree (`--omit=dev`) | 2.6 GB | 125,106 | resolved on-device or shipped whole |
+| `omniroute` package alone | 481 MB | 21,898 | — |
+
+2.6 GB is not a payload anyone should download to a phone, and resolving it
+on-device (option 1 below) means the phone does the work *and* keeps the bytes.
+
+**The chosen route is upstream's own standalone build.** The published package
+ships the tooling for it — `scripts/build/build-next-isolated.mjs` plus
+`assembleStandalone.mjs` (951 lines, with the copy list in one place), and
+`package.json` chains `build` → `postbuild: colocate-standalone.mjs`. That is
+the path their **Electron** build already uses to get a self-contained server,
+and there is a backend-only variant: `OMNIROUTE_BUILD_BACKEND_ONLY=1`
+(`npm run build:backend`), which exists precisely to leave the dashboard UI code
+out. The result is a directory with its own `standalone/node_modules`, which is
+what the app should download.
+
+Consequences, recorded now so the next step does not rediscover them:
+
+- The payload is produced in CI from source, as `omniroute-web.yml` already
+  does — that job is manual-only and needs the 10 GB swap step because this tree
+  OOMs a 7 GB runner. The mobile payload should come out of the *same* build,
+  not a new one.
+- Until that exists, `gateway/bootstrap.mjs` accepts any tarball whose root (or
+  whose single top-level directory) contains `dist/server.js`. That covers both
+  the future standalone output and today's npm tree, so the installer did not
+  have to wait for the packaging decision.
+- No `NODE_RUNTIME_SHA256`-style integrity variable is set for the payload yet,
+  so `EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256` is empty and the bootstrap installs
+  with a loud warning instead of a verified checksum. Setting it once the CI job
+  exists is a one-line change.
+
+Rejected: **resolving dependencies on the device.** It needs a registry
+round-trip, the full 2.6 GB of disk, and an answer for the optional native
+packages (`onnxruntime-node`, `better-sqlite3`, …) that cannot be compiled on
+Android at all — all of it to arrive at a worse copy of what CI can produce once.
+
+### 5c. The install flow
+
+`gateway/bootstrap.mjs` runs inside the embedded runtime and does the whole
+install, then boots. Deciding factors:
+
+- **The download happens in Node, not in the app.** The runtime already has
+  `fetch`, `crypto` and `zlib`. The app has none of those on the native side —
+  adding a downloader and an unzipper would mean two more native dependencies,
+  for a job the runtime can already do.
+- **It must boot the server too.** The runtime starts once per process, so
+  there is no second chance to run something else after installing. Install and
+  boot are therefore one script, not two.
+- **The app ships that script as a string.** `scripts/embed-gateway-bootstrap.mjs`
+  turns `gateway/bootstrap.mjs` into a generated constant, and CI fails if the
+  constant is stale. The alternative — a script literal in a `.ts` file — cannot
+  be run or tested by Node.
+- **Progress is a log**, because that is the only channel the runtime has back
+  to the app. The bootstrap prints deterministic lines (`downloading`,
+  `extracting…`, `install complete`, `starting …`, `FAILED: …`) and the app
+  tails them; the native module exposes the log file for exactly this.
+
+Install is deliberately crash-safe and restartable:
+
+- Downloads go to `<gatewayDir>/payload.tar.gz.part` and only get renamed once
+  the checksum matches.
+- If a previous run downloaded the payload and failed later, the next run
+  **reuses** it rather than re-downloading 100+ MB on someone's mobile data —
+  but only when it can re-verify the checksum.
+- Extraction goes to `app.new/`, and only replaces `app/` once it is complete
+  and contains the entry script. A crash mid-extract leaves the previous install
+  intact.
+- The tarball is deleted after a successful install; keeping it would double the
+  footprint for no benefit.
+- The archive's own paths are checked against the destination before anything is
+  written, so a crafted entry (`../../…`) cannot escape the install directory.
+- npm tarballs nest everything under `package/`, hand-rolled bundles do not. The
+  installer detects a single unambiguous nesting level and normalises it away.
+
+Verified locally against the real, published payload (see the numbers in §5b):
+the extractor's output is **byte-identical to system `tar`** for all 21,898
+files, 0 skipped entries, and a full run — download, checksum, extract, boot —
+was exercised end to end, as was the re-run path that skips a completed install.
+None of that is a substitute for a device; it does mean the logic is not being
+seen for the first time on someone's phone.
 
 ## 6. What will not work on-device
 
@@ -218,6 +307,7 @@ These are expected degradations; the UI must say so rather than pretend:
 | Risk | Mitigation |
 |---|---|
 | `digidem/nodejs-mobile` is a young, low-adoption fork (2 stars at time of writing) | Pin the exact release + verify the artifact checksum in CI; the build recipe is reproducible from upstream Node (`scripts/prepare.sh`), so we can rebuild it ourselves if it stalls. |
-| Untested on a real device | Phases 2–3 need a physical/emulated device before we claim it works. |
-| First-run download is 121 MB | Require Wi-Fi, show progress, allow cancel/resume; verify integrity before use. |
+| Untested on a real device | Every part of phases 1–3 that a machine *can* verify is verified (CI builds the native code and checks the APK's contents; the installer is exercised end to end against the real payload), but nothing has run inside an Android app process yet. That is the next milestone, and it is a hardware one. |
+| First-run download is too big | Not yet solved: the current payload is npm's 2.6 GB tree. §5b has the replacement (upstream's backend-only standalone build) and the installer already accepts it. Until then, treat "install" as Wi-Fi-only, and note that the checksum cannot be enforced because no `EXPO_PUBLIC_GATEWAY_PAYLOAD_SHA256` is published yet — the bootstrap says so in its log rather than pretending it verified something. |
+| The app and the payload drift apart | The bootstrap is the app's contract with the payload; it is versioned with the app, but the payload URL is not pinned to a version yet, so "latest" can move under an installed app. Pinning both to one release is part of the CI job in §5b. |
 | Native exec from app storage | Avoided entirely — the runtime lives in the APK's lib dir. |

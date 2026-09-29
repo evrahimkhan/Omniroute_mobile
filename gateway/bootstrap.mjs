@@ -26,7 +26,15 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, realpathSync } from 'node:fs';
+import {
+  appendFileSync,
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -39,12 +47,56 @@ const PAYLOAD_NAME = 'payload.tar.gz';
 /** Bytes between progress lines. Long installs must not look like a hang. */
 const PROGRESS_BYTES = 8 * 1024 * 1024;
 
+/**
+ * The gateway's own log, next to everything else it installs.
+ *
+ * Deliberately separate from the runtime log the app also reads. That one is a
+ * process-wide capture of stdout/stderr (Android gives a native library no
+ * console, so it is the only way to see a crash), and it therefore collects
+ * whatever else in the app writes there — Android WebView logs a steady stream
+ * of its own. Sharing one file meant browser chatter could push the gateway's
+ * own lines out of the window the app reads, so a failed install looked exactly
+ * like one that never started.
+ */
+const GATEWAY_LOG_NAME = 'gateway.log';
+
+function gatewayLogPath() {
+  return process.env.GATEWAY_DIR ? path.join(process.env.GATEWAY_DIR, GATEWAY_LOG_NAME) : '';
+}
+
+function appendToGatewayLog(line) {
+  const file = gatewayLogPath();
+  if (!file) return;
+  try {
+    appendFileSync(file, `${line}\n`);
+  } catch {
+    // Logging must never be the reason an install fails.
+  }
+}
+
+/** Start this run with an empty log: the app shows its tail, and last run's
+ *  failure would otherwise read as this run's. */
+function resetGatewayLog() {
+  const file = gatewayLogPath();
+  if (!file) return;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '');
+  } catch {
+    // As above.
+  }
+}
+
 function log(...args) {
-  console.log('[gateway]', ...args);
+  const line = `[gateway] ${args.join(' ')}`;
+  console.log(line);
+  appendToGatewayLog(line);
 }
 
 function fatal(err) {
-  console.error('[gateway] FAILED:', err && err.stack ? err.stack : String(err));
+  const line = `[gateway] FAILED: ${err && err.stack ? err.stack : String(err)}`;
+  console.error(line);
+  appendToGatewayLog(line);
   process.exit(1);
 }
 
@@ -374,6 +426,7 @@ async function main() {
   // Printed before anything else can fail, so an empty log means the script
   // never got this far — a different problem from a gateway that failed to
   // install, and one the app can only guess at otherwise.
+  resetGatewayLog();
   log(`starting on node ${process.version} (pid ${process.pid})`);
 
   const gatewayDir = process.env.GATEWAY_DIR;

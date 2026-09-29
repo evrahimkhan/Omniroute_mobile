@@ -186,12 +186,42 @@ async function readMarker(): Promise<InstallMarker | null> {
 }
 
 /** Tail of the runtime log; the bootstrap's progress lands here. */
+/** The gateway's own log, written by the bootstrap. Mirrors its GATEWAY_LOG_NAME. */
+const GATEWAY_LOG_FILE = 'gateway.log';
+
+function gatewayLogPath(): string {
+  return `${NodeRuntime.getPaths().gatewayDir}/${GATEWAY_LOG_FILE}`;
+}
+
+/**
+ * The runtime's own markers, kept while everything else in the runtime log is
+ * dropped.
+ *
+ * That log is the process's captured stdout/stderr, so it also carries whatever
+ * else in the app writes there — Android WebView logs a steady stream of its
+ * own. These lines are the ones that say whether the script was handed to the
+ * runtime and how node ended; the rest is noise that can bury them.
+ */
+const RUNTIME_LOG_MARKER = '[node-runtime]';
+
+/**
+ * The log the card shows and the state machine reads.
+ *
+ * Two sources, because they answer different questions: the gateway's own log
+ * (did the script run, and what did it do) and the runtime's markers (was the
+ * script even handed over, and how did node end). Neither is conclusive alone —
+ * an empty gateway log only means something next to a runtime that started.
+ */
 export async function readGatewayLog(maxBytes = 64 * 1024): Promise<string> {
-  try {
-    return await NodeRuntime.readLog(maxBytes);
-  } catch {
-    return '';
-  }
+  const runtimeLog = await NodeRuntime.readLog(maxBytes).catch(() => '');
+  const gatewayLog = await NodeRuntime.readFile(gatewayLogPath(), maxBytes).catch(() => null);
+
+  const runtimeLines = (runtimeLog ?? '')
+    .split('\n')
+    .filter((line) => line.includes(RUNTIME_LOG_MARKER))
+    .join('\n');
+
+  return [gatewayLog ?? '', runtimeLines].filter(Boolean).join('\n');
 }
 
 /** Current state, derived from the native runtime, the marker and the log. */

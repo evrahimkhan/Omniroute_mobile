@@ -87,19 +87,22 @@ jobs:
       # here instead, in 30 seconds and in plain language. (Also the only place
       # anything ever looks inside the published artifact.)
       - name: Inspect the fetched runtime
+        # Deliberately no `set -e`: every command here is a probe, and a probe
+        # that finds nothing must not abort the report before it is emitted.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           so=modules/node-runtime/android/src/main/jniLibs/arm64-v8a/libnode.so
-          ls -la "$(dirname "$so")"
+          ls -la "$(dirname "$so")" || true
           readelf -h "$so" | grep -E 'Class:|Machine:|Type:' || true
+
           syms=$(readelf -sW --dyn-syms "$so")
           # $7 is the Ndx column: UND means the symbol is only referenced, not
           # provided — which is exactly the case that would fail the link.
           defined=$(printf '%s\n' "$syms" | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}')
-          echo "defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
 
           if printf '%s\n' "$defined" | grep -qx '_ZN4node5StartEiPPc'; then
             echo "✓ libnode.so exports node::Start"
+            echo "defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
             exit 0
           fi
 
@@ -107,19 +110,24 @@ jobs:
           # entirely, hidden by a version script, or stripped.
           {
             echo "the fetched libnode.so does not define node::Start"
-            echo "-- any mention of it (0 means absent, UND means referenced only):"
-            printf '%s\n' "$syms" | grep 'node5Start' | head -5
-            echo "-- defined symbols matching 'Start' (mangled):"
-            printf '%s\n' "$defined" | grep -i 'start' | head -20
-            echo "-- node-namespace symbols, first 25:"
-            printf '%s\n' "$defined" | grep '^_ZN4node' | head -25
-            echo "-- napi_/node_api_ defined count: $(printf '%s\n' "$defined" | grep -cE '^(napi_|node_api_)' || true)"
-            echo "-- other node-ish entry points:"
-            printf '%s\n' "$defined" | grep -iE 'startnode|nodeinstance|start\.|embed|initializ' | head -15
-          } > /tmp/symdump.txt
+            echo "total defined dynamic symbols: $(printf '%s\n' "$defined" | grep -c . || true)"
+            echo "--- lines mentioning node5Start (nothing = absent; UND = referenced only):"
+            printf '%s\n' "$syms" | grep 'node5Start' || echo "(no mention at all)"
+            echo "--- defined symbols containing 'start':"
+            printf '%s\n' "$defined" | grep -i 'start' | head -20 || echo "(none)"
+            echo "--- defined symbols containing 'node' (mangled, first 30):"
+            printf '%s\n' "$defined" | grep -i 'node' | head -30 || echo "(none)"
+            echo "--- napi_/node_api_ defined count: $(printf '%s\n' "$defined" | grep -cE '^(napi_|node_api_)' || true)"
+            echo "--- does a version script cover the dynamic symbols?"
+            readelf --version-info "$so" | head -20 || echo "(no version info)"
+            echo "--- dynamic section:"
+            readelf -d "$so" | grep -E 'SONAME|NEEDED|FLAGS' | head -10 || echo "(none)"
+          } > /tmp/symdump.txt 2>&1
+
           cat /tmp/symdump.txt
+          body=$(sed ':a;N;$!ba;s/\n/%0A/g' /tmp/symdump.txt)
           # One annotation, because GitHub only surfaces a handful per step.
-          echo "::error title=libnode.so does not export node::Start::$(sed ':a;N;$!ba;s/\n/%0A/g' /tmp/symdump.txt | cut -c1-4000)"
+          echo "::error title=libnode.so does not export node::Start::${body:0:4000}"
           exit 1
 
       - name: Setup Java 17

@@ -18,7 +18,8 @@
     "gateway:embed": "node scripts/embed-gateway-bootstrap.mjs",
     "gateway:test": "node scripts/check-gateway-log.mjs",
     "payload:pack": "node scripts/pack-payload.mjs",
-    "payload:test": "node scripts/check-payload-pack.mjs"
+    "payload:test": "node scripts/check-payload-pack.mjs",
+    "payload:install-test": "node scripts/check-payload-install.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

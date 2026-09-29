@@ -347,10 +347,25 @@ mysterious failures.
 
 Progress comes from the runtime log, which is the only channel a native runtime
 has back to the app. That makes `lib/gatewayLog.ts` a contract with
-`gateway/bootstrap.mjs`, and a contract that can break silently: an earlier
-version looked for `already installed` while the script printed `gateway already
-installed`, so that phase simply never fired. `npm run gateway:test` now asserts
-the parser against the real log lines in CI, and reports which line drifted.
+`gateway/bootstrap.mjs`, and a contract that can break silently — it has done so
+twice, first with `already installed` against `gateway already installed`, then
+with `warning: GATEWAY_PAYLOAD_SHA256 is not set` against
+`warning: no checksum available (…)`. `npm run gateway:test` asserts the parser
+against the real log lines in CI and reports which line drifted; each sample it
+uses also carries an *anchor*, the text its meaning depends on, which must still
+appear in the bootstrap, so a reworded message fails rather than passing on a
+stale copy.
+
+The install chain has its own gate. `npm run payload:install-test` builds two
+fixture payloads (a standalone tree, and an npm tree whose root also contains a
+decoy `server.js`), serves them over loopback with their checksum manifests, and
+runs the real `gateway/bootstrap.mjs` against each as the app would: download,
+verify, extract, install, boot. It asserts which entry was chosen, that the
+payload's own process came up *and answered `/healthz`*, and that a second run
+with no URL reuses the install and still resolves the entry. That last part is
+not hypothetical — the first end-to-end run against a standalone payload failed
+at `payload does not contain dist/server.js`, after a successful download and
+extract.
 
 ## 6. What will not work on-device
 

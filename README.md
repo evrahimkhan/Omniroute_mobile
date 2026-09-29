@@ -138,7 +138,7 @@ How it fits together:
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| **App CI** (`app-ci.yml`) | every push to `arena/01a0e9f8-omniroute-mobile` + every PR | workflow-file audit + typecheck + Hermes bundle (fast compile gate for the app) |
+| **App CI** (`app-ci.yml`) | every push to `arena/01a0e9f8-omniroute-mobile` + every PR | workflow-file audit + typecheck + Hermes bundle, plus the gateway gates: bootstrap freshness, log contract, payload round-trip, installer installs and boots both payload shapes |
 | **Build Android APK** (`android-apk.yml`) | push to `arena/01a0e9f8-omniroute-mobile` + **manual dispatch** (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
 | **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
 | **Build iOS (EAS)** (`ios-eas.yml`) | **manual dispatch** (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |

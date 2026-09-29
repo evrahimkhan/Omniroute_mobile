@@ -310,6 +310,10 @@ jobs:
         with:
           tag_name: "mobile-v${{ steps.ver.outputs.version }}-b${{ steps.ver.outputs.buildcode }}"
           name: "OmniRoute Mobile v${{ steps.ver.outputs.version }} (build ${{ steps.ver.outputs.buildcode }})"
+          # Without this the tag is created on the repository's default branch
+          # head, so a release does not say which commit it built — every release
+          # here pointed at the same import commit.
+          target_commitish: ${{ github.sha }}
           files: dist/*.apk
           generate_release_notes: true
           fail_on_unmatched_files: false

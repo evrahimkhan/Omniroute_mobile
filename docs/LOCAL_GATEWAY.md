@@ -253,7 +253,11 @@ build job, gated by the workflow's `payload` input (on by default):
    This is also the step that would catch a missing dependency tree.
 4. *Publish the gateway payload* — `gh release` on the fixed tag
    `gateway-payload`, with `--clobber`, uploading both the archive and the
-   manifest.
+   manifest. The release notes are rewritten on every dispatch from the
+   manifest itself, so they name the upstream ref and commit the payload was
+   built from, the run that packed it, the file count and the digest. Assets on
+   a tag like this are replaced in place, so notes left over from the first
+   upload would be worse than none.
 5. Upload both as a run artifact, so an unpublishable payload can still be
    inspected.
 

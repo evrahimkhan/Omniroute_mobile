@@ -279,8 +279,28 @@ jobs:
             omniroute-payload.tar.gz \
             omniroute-payload.tar.gz.json \
             --clobber
+
+          # Say what is in the release, on every dispatch: the assets are replaced in
+          # place, so a stale description would be worse than none. Everything below is
+          # read from the manifest the app verifies against, not recomputed.
+          manifest="$GITHUB_WORKSPACE/omniroute-payload.tar.gz.json"
+          sha256=$(node -p "require('$manifest').sha256")
+          files=$(node -p "require('$manifest').files")
+          bytes=$(node -p "require('$manifest').bytes")
+          gh release edit "$tag" --notes "$(cat <<EOF
+          Self-contained OmniRoute build that the mobile app downloads and runs on-device.
+
+          - built from \`${{ inputs.ref || 'main' }}\` at \`${{ steps.fetch.outputs.sha }}\`
+          - packed by workflow run https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - $files files, $bytes bytes uncompressed
+          - sha256: \`$sha256\`
+
+          Replaced on every dispatch of the **Build OmniRoute source** workflow. The app
+          fetches \`omniroute-payload.tar.gz.json\` and verifies its download against it.
+          EOF
+          )"
           echo "published to $(gh release view "$tag" --json url --jq .url)"
-          cat omniroute-payload.tar.gz.json
+          cat "$manifest"
 
       - name: Upload the payload as an artifact too
         if: ${{ inputs.payload }}

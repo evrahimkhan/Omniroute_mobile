@@ -34,7 +34,12 @@ permissions:
 jobs:
   check:
     name: Typecheck & bundle
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: GitHub starts migrating
+    # ubuntu-latest to Ubuntu 26 on 2026-10-19, and the Android job now
+    # compiles C++ against a specific NDK/CMake/JDK. A base-image change can
+    # move all three, so the upgrade should be a deliberate commit (bump this
+    # line, run the workflows, fix what breaks) rather than a surprise.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout

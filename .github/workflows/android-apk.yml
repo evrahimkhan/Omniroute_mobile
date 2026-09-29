@@ -82,6 +82,27 @@ jobs:
           NODE_RUNTIME_SHA256: ${{ vars.NODE_RUNTIME_SHA256 }}
         run: node scripts/fetch-node-runtime.mjs --abis arm64-v8a,armeabi-v7a
 
+      # The shim links against node::Start, so if the prebuilt runtime does not
+      # export it the build dies at link time with an undefined symbol. Say so
+      # here instead, in 30 seconds and in plain language. (Also the only place
+      # anything ever looks inside the published artifact.)
+      - name: Inspect the fetched runtime
+        run: |
+          set -euo pipefail
+          so=modules/node-runtime/android/src/main/jniLibs/arm64-v8a/libnode.so
+          ls -la "$(dirname "$so")"
+          readelf -h "$so" | grep -E 'Class:|Machine:|Type:' || true
+          # $7 is the Ndx column: UND means the symbol is only referenced, not
+          # provided — which is exactly the case that would fail the link.
+          if readelf -sW --dyn-syms "$so" \
+               | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}' \
+               | grep -qx '_ZN4node5StartEiPPc'; then
+            echo "✓ libnode.so exports node::Start"
+          else
+            echo "::error title=libnode.so does not export node::Start::The JNI shim calls node::Start, so the link step cannot succeed with this artifact."
+            exit 1
+          fi
+
       - name: Setup Java 17
         uses: actions/setup-java@v6
         with:

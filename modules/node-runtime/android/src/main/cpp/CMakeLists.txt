@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(noderuntime_jni CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+# Node's public headers are C++20 (they use `concept`/`requires` and
+# std::contiguous_iterator_tag, which only exist in C++20 mode). Compiling them
+# as C++17 fails inside v8/cppgc before it ever reaches this file.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # The prebuilt runtime, placed by `npm run runtime:fetch`

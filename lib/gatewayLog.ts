@@ -119,8 +119,9 @@ export function gatewayProgress(log: string): GatewayProgress | null {
 function explainFailure(detail: string): string {
   if (/HTTP 40[34]/.test(detail)) {
     return (
-      `${detail} — no payload file is published for this build's payload URL. ` +
-      `Run the "Build OmniRoute web gateway" workflow (payload on), then try again.`
+      `${detail} — GitHub refused this file for this network. Either the payload has not been ` +
+      `published (run the "Build OmniRoute web gateway" workflow with payload on), or this ` +
+      `connection is filtering GitHub's download host — try another Wi-Fi or mobile network.`
     );
   }
   return detail;

@@ -181,6 +181,10 @@ async function main() {
   const flakyPayload = readFileSync(standaloneTar);
   const flakyUrl = '/flaky.tar.gz';
   const stallUrl = '/stall.tar.gz';
+  const retryUrl = '/retry.tar.gz';
+  const alwaysDropUrl = '/always-drop.tar.gz';
+  let retryHits = 0;
+  let alwaysHits = 0;
   let flakyHits = 0;
   let stallHits = 0;
   // Every Range header seen, so an assertion can talk about the *retry* rather
@@ -188,6 +192,28 @@ async function main() {
   const rangesSeen = { flaky: [], stall: [] };
 
   const httpServer = createServer((req, res) => {
+    if (req.url === retryUrl) {
+      retryHits++;
+      if (retryHits === 1) {
+        res.writeHead(500);
+        res.end('try again');
+        return;
+      }
+      res.writeHead(200, { 'content-length': flakyPayload.length });
+      res.end(flakyPayload);
+      return;
+    }
+
+    if (req.url === alwaysDropUrl) {
+      // Drops on every attempt, so a single run exhausts its retries and the
+      // partial file is left behind for the next one.
+      alwaysHits++;
+      res.writeHead(200, { 'content-length': flakyPayload.length });
+      res.write(flakyPayload.subarray(0, Math.floor(flakyPayload.length / 4)));
+      setTimeout(() => res.destroy(), 30);
+      return;
+    }
+
     if (req.url === flakyUrl || req.url === stallUrl) {
       const isFlaky = req.url === flakyUrl;
       const payload = flakyPayload;
@@ -319,46 +345,78 @@ async function main() {
     GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
   });
   check('a dropped connection is reported as a download failure', seventh.output.includes('download failed'));
-
-  const eighth = await run('resumed', flakyDir, {
-    GATEWAY_PAYLOAD_URL: `${origin}${flakyUrl}`,
-    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
-  });
-  check('the next attempt resumes instead of starting over', eighth.output.includes('resuming the download at'));
+  check('the failure is retried inside the same attempt', seventh.output.includes('— retrying'));
+  check(
+    'the retry resumes instead of starting over',
+    seventh.output.includes('resuming the download at')
+  );
   check(
     'the retry asked the server for only the missing part',
     String(rangesSeen.flaky.at(-1)).startsWith('bytes=')
   );
   check(
-    'the resumed file is the same file: it verifies and boots',
-    eighth.output.includes('checksum ok') && eighth.output.includes('STANDALONE listening') && eighth.servedOk === 'ok'
+    'the reassembled file verifies and boots',
+    seventh.output.includes('checksum ok') && seventh.output.includes('STANDALONE listening') && seventh.servedOk === 'ok'
   );
 
   // --- case 8: the connection stops delivering bytes entirely ---------------
   const stallDir = join(work, 'install-stall');
   const ninth = await run('stalled', stallDir, {
     GATEWAY_PAYLOAD_URL: `${origin}${stallUrl}`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
     GATEWAY_DOWNLOAD_STALL_MS: '1500',
   });
   check('a download that stops delivering is called stalled', ninth.output.includes('download stalled after'));
   check(
-    'and the partial download is kept, because it is the resume point',
-    existsSync(join(stallDir, 'payload.tar.gz.part'))
-  );
-
-  const tenth = await run('resumed after a stall', stallDir, {
-    GATEWAY_PAYLOAD_URL: `${origin}${stallUrl}`,
-    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
-    GATEWAY_DOWNLOAD_STALL_MS: '1500',
-  });
-  check('a stalled download resumes on the next attempt', tenth.output.includes('resuming the download at'));
-  check(
-    'and finishes: checksum ok, and the payload boots',
-    tenth.output.includes('checksum ok') && tenth.output.includes('STANDALONE listening') && tenth.servedOk === 'ok'
+    'a stalled download resumes on the next attempt and finishes',
+    ninth.output.includes('resuming the download at') &&
+      ninth.output.includes('checksum ok') &&
+      ninth.output.includes('STANDALONE listening') &&
+      ninth.servedOk === 'ok'
   );
   check(
     'the retry after a stall only asked for the missing bytes',
     String(rangesSeen.stall.at(-1)).startsWith('bytes=')
+  );
+
+  // --- case 11: every attempt fails — the partial file is the next resume point
+  const dropDir = join(work, 'install-always-drop');
+  const tenth = await run('always drops', dropDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${alwaysDropUrl}`,
+  });
+  check('a download that never completes fails the install', tenth.output.includes('download failed'));
+  check('all three attempts were made', alwaysHits >= 3);
+  const part = join(dropDir, 'payload.tar.gz.part');
+  const kept = existsSync(part) ? readFileSync(part).length : 0;
+  check('the partial download is kept, so the next run resumes rather than restarts', kept > 0);
+
+  // --- case 9: the checksum manifest is unreachable ------------------------
+  //
+  // The exact failure a real phone hit: GitHub answered 404 for the manifest
+  // URL, and the install refused to proceed at all — even though the payload
+  // itself was perfectly downloadable. An unreachable checksum is now a warning.
+  const noShaDir = join(work, 'install-no-manifest');
+  const eleventh = await run('no manifest', noShaDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}/standalone.tar.gz`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/does-not-exist.json`,
+  });
+  check(
+    'an unreachable checksum manifest does not stop the install',
+    eleventh.output.includes('warning: no checksum available') &&
+      eleventh.output.includes('STANDALONE listening') &&
+      eleventh.servedOk === 'ok'
+  );
+  check('and it says why the checksum was missing', eleventh.output.includes('could not be fetched'));
+
+  // --- case 10: the server errors once, then serves ------------------------
+  const retryDir = join(work, 'install-retry');
+  const twelfth = await run('500 then ok', retryDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${retryUrl}`,
+  });
+  check('a 500 is retried rather than reported', twelfth.output.includes('failed (download failed: HTTP 500'));
+  check(
+    'and the retry installs and boots',
+    twelfth.output.includes('STANDALONE listening') && twelfth.servedOk === 'ok'
   );
 
   // --- case 6: the log the app actually reads -------------------------------
@@ -389,7 +447,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 29;
+  const total = 34;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

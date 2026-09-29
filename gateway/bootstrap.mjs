@@ -431,7 +431,13 @@ async function download(url, destPath) {
 
   if (!response.ok) {
     clearTimeout(timer);
-    throw new Error(`download failed: HTTP ${response.status} ${response.statusText}`);
+    // 403/404 here means the host would not serve this file to this network at
+    // all — different advice from a timeout, and worth saying out loud.
+    const hint =
+      response.status === 403 || response.status === 404
+        ? ' — GitHub would not serve this file to this network. Try again on another Wi-Fi or mobile connection.'
+        : '';
+    throw new Error(`download failed: HTTP ${response.status} ${response.statusText} for ${url}${hint}`);
   }
   if (!response.body) {
     clearTimeout(timer);
@@ -510,6 +516,28 @@ async function download(url, destPath) {
 
   log(`downloaded ${mb(received)}`);
   return received;
+}
+
+/**
+ * Try the download a few times before giving up.
+ *
+ * Anything that looks transient — a timeout, a dropped socket, a 5xx, a body
+ * that ended early — is worth another attempt, because another attempt resumes
+ * rather than restarts. A 4xx is not: the server has answered, and it will
+ * answer the same way. 408 and 429 are the exceptions, being explicitly about
+ * trying again.
+ */
+async function downloadWithRetries(url, destPath, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await download(url, destPath);
+    } catch (err) {
+      const clientError = /HTTP 4\d\d/.test(err.message) && !/HTTP (408|429)/.test(err.message);
+      if (clientError || attempt >= attempts) throw err;
+      log(`download attempt ${attempt} failed (${err.message}) — retrying`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
 }
 
 /**
@@ -621,7 +649,18 @@ async function main() {
         expectedSha = await fetchExpectedSha256(shaUrl);
         log(`expected ${expectedSha.slice(0, 16)}…`);
       } catch (err) {
-        throw new Error(`could not fetch the expected checksum from ${shaUrl}: ${err.message}`);
+        // Not fatal, on purpose. The manifest is served from the same host as the
+        // payload, so it guards against corruption in transit rather than against
+        // a hostile publisher — and gzip's own CRC catches most corruption
+        // anyway. Refusing to install at all because a *checksum* URL is
+        // unreachable (a filtered network, a captive portal, a 404, a flaky
+        // proxy) turns defence-in-depth into an outage: a real phone hit exactly
+        // this and could not install a payload it was able to download. A
+        // manifest that *was* fetched and does not match stays fatal, below.
+        expectedSha = '';
+        log(
+          `warning: no checksum available (the manifest at ${shaUrl} could not be fetched: ${err.message}) — installing without integrity verification`
+        );
       }
     }
 
@@ -642,7 +681,7 @@ async function main() {
       }
 
       if (!haveTarball) {
-        await download(url, partPath);
+        await downloadWithRetries(url, partPath);
 
         if (expectedSha) {
           log('verifying checksum…');

@@ -104,8 +104,14 @@ function compile() {
 async function main() {
   const { out, file } = compile();
   try {
-    const { gatewayProgress, gatewayLogTail, describeGatewayLog, gatewayNeverRan, describeRuntimeExit } =
-      await import(pathToFileURL(file).href);
+    const {
+      gatewayProgress,
+      gatewayLogTail,
+      describeGatewayLog,
+      gatewayNeverRan,
+      describeRuntimeExit,
+      deriveGatewayPhase,
+    } = await import(pathToFileURL(file).href);
 
     const failures = [];
     const check = (label, ok) => {
@@ -224,6 +230,39 @@ async function main() {
       describeRuntimeExit(1, '[gateway] FAILED: boom') === 'The embedded runtime exited (code 1).'
     );
 
+    // The phase comes from the runtime's state, refined by the log — never from
+    // the log alone. The stuck card came from the log winning.
+    const STARTED = '[gateway] starting server.js on 127.0.0.1:20128';
+    check(
+      'a running runtime that is installing reads as installing',
+      deriveGatewayPhase({ running: true, exited: false, hasMarker: false, log: '[gateway] downloaded 8.1 MB (7%)' }) ===
+        'installing'
+    );
+    check(
+      'a running runtime that has started the server reads as starting',
+      deriveGatewayPhase({ running: true, exited: false, hasMarker: true, log: STARTED }) === 'starting'
+    );
+    check(
+      'an exited runtime reads as failed',
+      deriveGatewayPhase({ running: false, exited: true, hasMarker: true, log: STARTED }) === 'failed'
+    );
+    check(
+      'a printed failure reads as failed even if nothing exited',
+      deriveGatewayPhase({ running: false, exited: false, hasMarker: true, log: '[gateway] FAILED: boom' }) ===
+        'failed'
+    );
+    // The regression: after a crash this line is the last thing written, and
+    // reading it as "starting" left a fresh session spinning forever.
+    check(
+      'a stale "starting" line with nothing running reads as idle, not starting',
+      deriveGatewayPhase({ running: false, exited: false, hasMarker: true, log: STARTED }) === 'idle'
+    );
+    check(
+      'a stale "downloading" line with nothing running reads as idle too',
+      deriveGatewayPhase({ running: false, exited: false, hasMarker: true, log: '[gateway] downloaded 8.1 MB (7%)' }) ===
+        'idle'
+    );
+
     check('tail keeps the end', gatewayLogTail('a\nb\nc\nd', 2) === 'c\nd');
     check('tail strips blanks', gatewayLogTail('a\n\n  \nb', 5) === 'a\nb');
 
@@ -236,7 +275,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 19} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${CASES.length * 2 + 25} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

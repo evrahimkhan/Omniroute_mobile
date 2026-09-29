@@ -638,6 +638,53 @@ Guards: `payload:install-test` reproduces the phone's case (a manifest URL that
 dropped socket that recovers within one attempt, and an endpoint that always
 drops to prove the partial file survives for the next run — 34 assertions.
 
+### 5k. A status that does not lie, and a log that survives a death
+
+The first install that got all the way through — download, 44,003 files
+extracted, `install complete`, `starting server.js on 127.0.0.1:20128` — ended
+with the app process gone. Reopening it showed **"Starting the gateway…"**
+forever, with a spinner and no button: the only way out was to remove the
+install.
+
+That second part was the app's fault, and it is the more embarrassing half. The
+phase was derived from the *log*:
+
+```ts
+if (fromLog.phase === 'installing') phase = 'installing';
+else if (status.running && marker) phase = 'starting';
+else if (fromLog.phase === 'starting' || (status.running && !marker)) phase = 'starting';
+```
+
+The third line reads a file from a previous process and reports it as the
+present. A line in a log is a record of what happened once; it is not evidence
+of what is happening now. `deriveGatewayPhase()` in `lib/gatewayLog.ts` now
+decides from the runtime's real state — running, exited, or neither — and lets
+the log only *refine* it (installing vs starting). Nothing running and nothing
+exited is `idle`, which shows "Installed — not running" and a **Start the
+gateway** button. It is a pure function, so `gateway:test` covers the table,
+including the exact stale line that trapped the phone.
+
+The first part — the death itself — cannot be fixed from here without evidence,
+so the app now collects it:
+
+  - The bootstrap logs `${entry} loaded; waiting for host:port to answer` as soon
+    as the payload's server module has been imported, and then polls
+    `/healthz` itself, logging `the server is answering on <url>`. That
+    distinguishes "never came up" from "came up and later died" in a log that
+    outlives the process.
+  - The card's expanded log now shows **"What the runtime printed"**: the part of
+    `node.log` after the last `[node-runtime] starting node` marker, which is
+    where the payload server's stdout and any native abort message land. It is
+    display-only — `readGatewayLog()` (state) still refuses to touch the
+    process-wide log, and `runtime:contract` asserts that on the function bodies,
+    so noise cannot come back into the state machine through the display path.
+
+Nothing has yet proved the runtime survives a Next server boot on hardware with
+2.3 GB of payload: the app process died silently on the first attempt, which
+points at memory or an OEM task killer rather than a JavaScript error (a
+JavaScript error would have printed `[gateway] FAILED:` and did not). The next
+attempt's `node.log` tail should say which.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

@@ -269,7 +269,8 @@ async function main() {
     const port = await freePort();
     const child = await bootAndRead(
       { GATEWAY_DIR: gatewayDir, GATEWAY_HOST: '127.0.0.1', GATEWAY_PORT: String(port), HOME: home, TMPDIR: tmp, ...extra },
-      (text) => text.includes('listening') || text.includes('[gateway] FAILED'),
+      invocation.ready ??
+        ((text) => text.includes('listening') || text.includes('[gateway] FAILED')),
       { args: [RUN_FLAG], ...invocation }
     );
     const output = child.output();
@@ -283,10 +284,17 @@ async function main() {
 
   // --- case 1: a standalone tree -------------------------------------------
   const install1 = join(work, 'install-standalone');
-  const first = await run('standalone', install1, {
-    GATEWAY_PAYLOAD_URL: `${origin}/standalone.tar.gz`,
-    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
-  });
+  const first = await run(
+    'standalone',
+    install1,
+    {
+      GATEWAY_PAYLOAD_URL: `${origin}/standalone.tar.gz`,
+      GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
+    },
+    // Wait for the bootstrap's own health check, so the assertions below can
+    // cover the record a crash report is read from.
+    { ready: (text) => text.includes('the server is answering on') || text.includes('[gateway] FAILED') }
+  );
   check('standalone payload: the entry is server.js, not the default dist/server.js', first.output.includes('entry is server.js (not dist/server.js)'));
   check('standalone payload: it is started', first.output.includes('starting server.js on 127.0.0.1:'));
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
@@ -295,6 +303,11 @@ async function main() {
   check(
     'the install checks for free space before writing the archive',
     /free space [\d.]+ MB, need about [\d.]+ MB/.test(first.output)
+  );
+  check('the server module loaded', first.output.includes('loaded; waiting for'));
+  check(
+    'and the log records the server answering, so a later death is distinguishable',
+    first.output.includes('the server is answering on http://127.0.0.1:')
   );
 
   // --- case 2: an npm-shaped tree with a decoy at the root -----------------
@@ -447,7 +460,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 34;
+  const total = 36;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

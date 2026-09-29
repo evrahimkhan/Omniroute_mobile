@@ -127,6 +127,39 @@ function explainFailure(detail: string): string {
   return detail;
 }
 
+/**
+ * Which phase the app is in, from the runtime's real state and the log.
+ *
+ * The runtime's state decides, and the log only refines it. Deriving the phase
+ * from the log alone is how a card gets stuck: after the process died, the last
+ * line was `starting server.js on 127.0.0.1:20128`, so a fresh app session — no
+ * runtime, nothing running — showed a spinner and "Starting the gateway…"
+ * forever, with no way to start anything. A line in a file is a record of what
+ * happened once, not evidence of what is happening now.
+ */
+export function deriveGatewayPhase(input: {
+  /** A runtime is up in this process. */
+  running: boolean;
+  /** A runtime ran in this process and has finished. */
+  exited: boolean;
+  /** The payload is installed on disk. */
+  hasMarker: boolean;
+  /** The gateway's own log plus the runtime's markers. */
+  log: string;
+}): GatewayPhaseName {
+  const fromLog = describeGatewayLog(input.log);
+  // A printed failure stands on its own: it is a fact about this session's log,
+  // which the app truncates at the start of every attempt.
+  if (fromLog.phase === 'failed') return 'failed';
+  if (input.exited) return 'failed';
+  if (input.running) {
+    return fromLog.phase === 'installing' ? 'installing' : 'starting';
+  }
+  // Nothing is running and the runtime has not exited in this process: whatever
+  // the log says about a previous attempt, there is no gateway now.
+  return 'idle';
+}
+
 /** Last few meaningful log lines, for when something goes wrong. */
 export function gatewayLogTail(log: string, lines = 8): string {
   return log

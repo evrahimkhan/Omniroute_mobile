@@ -390,6 +390,19 @@ export default function LocalGatewayCard({ onUse }: Props) {
       {showLog && state?.logTail ? (
         <Text style={styles.log}>{gatewayLogTail(state.logTail, 14)}</Text>
       ) : null}
+
+      {/*
+        What the runtime process printed. Separate from the gateway's log, and
+        shown second, because it is the only place a native crash says anything:
+        a process that dies without a JavaScript error leaves its last words
+        here and nowhere else.
+      */}
+      {showLog && state?.runtimeTail ? (
+        <>
+          <Text style={styles.logLabel}>What the runtime printed</Text>
+          <Text style={styles.log}>{state.runtimeTail}</Text>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -445,6 +458,13 @@ const styles = StyleSheet.create({
   toggleNote: { color: theme.textMuted, fontSize: 11, lineHeight: 15 },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   linkLabel: { color: theme.textMuted, fontSize: 13, fontWeight: '600' },
+  logLabel: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 10,
+    marginBottom: 2,
+  },
   log: {
     color: theme.textMuted,
     fontSize: 11,

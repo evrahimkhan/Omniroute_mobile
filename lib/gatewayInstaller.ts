@@ -25,6 +25,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import NodeRuntime from '../modules/node-runtime';
 import { BOOTSTRAP_SCRIPT } from './gateway/bootstrapScript.generated';
 import {
+  deriveGatewayPhase,
   describeGatewayLog,
   describeRuntimeExit,
   gatewayLogTail,
@@ -113,8 +114,17 @@ export interface GatewayState {
   installed: boolean;
   /** When the payload was installed (marker's timestamp). */
   installedAt: string | null;
-  /** Tail of the runtime log — the runtime's only channel back to the app. */
+  /** Tail of the gateway's log plus the runtime's markers — what the state is read from. */
   logTail: string;
+  /**
+   * What the runtime process itself printed during its most recent run — the
+   * payload server's own output, and whatever a native crash said.
+   *
+   * Display only, never state: this comes from the process-wide stdout capture,
+   * so it also carries every other writer in the app. Kept separate so noise can
+   * never again bury the lines the app reasons about.
+   */
+  runtimeTail: string;
   /** Present when the phase is `failed`. */
   error?: string;
   /**
@@ -224,6 +234,25 @@ function runtimeLogPath(): string {
  * script even handed over, and how did node end). Neither is conclusive alone —
  * an empty gateway log only means something next to a runtime that started.
  */
+/**
+ * The runtime's own output for its most recent run, for a crash report.
+ *
+ * `node.log` is the process's captured stdout/stderr and therefore full of other
+ * writers (Android WebView, React Native). Everything before the last
+ * `[node-runtime] starting node` marker belongs to an earlier run or to the app
+ * warming up, so that is where this starts — the payload server's output and any
+ * native abort message land after it.
+ */
+export async function readRuntimeOutput(maxBytes = 64 * 1024): Promise<string> {
+  const raw = await NodeRuntime.readLog(maxBytes).catch(() => '');
+  if (!raw) return '';
+  const marker = '[node-runtime] starting node';
+  const at = raw.lastIndexOf(marker);
+  const relevant = at === -1 ? raw : raw.slice(at);
+  const lines = relevant.split('\n');
+  return lines.slice(-40).join('\n').trim();
+}
+
 export async function readGatewayLog(maxBytes = 64 * 1024): Promise<string> {
   const runtimeLog = await NodeRuntime.readFile(runtimeLogPath(), maxBytes).catch(() => null);
   const gatewayLog = await NodeRuntime.readFile(gatewayLogPath(), maxBytes).catch(() => null);
@@ -245,6 +274,7 @@ export async function gatewayState(): Promise<GatewayState> {
       keepAlive: false,
       runtimeExited: false,
       logTail: '',
+      runtimeTail: '',
       error: localGatewayUnavailableReason() ?? undefined,
       url,
     };
@@ -254,6 +284,7 @@ export async function gatewayState(): Promise<GatewayState> {
   const keepAlive = Boolean(status.keepAlive);
   const marker = await readMarker();
   const log = await readGatewayLog();
+  const runtimeTail = await readRuntimeOutput();
   const fromLog = describeGatewayLog(log);
 
   if (status.exited || fromLog.phase === 'failed') {
@@ -264,15 +295,18 @@ export async function gatewayState(): Promise<GatewayState> {
       keepAlive: false,
       runtimeExited: Boolean(status.exited),
       logTail: log,
+      runtimeTail,
       error: fromLog.error ?? describeRuntimeExit(status.exitCode, log),
       url,
     };
   }
 
-  let phase: GatewayPhase = 'idle';
-  if (fromLog.phase === 'installing') phase = 'installing';
-  else if (status.running && marker) phase = 'starting';
-  else if (fromLog.phase === 'starting' || (status.running && !marker)) phase = 'starting';
+  const phase = deriveGatewayPhase({
+    running: status.running,
+    exited: Boolean(status.exited),
+    hasMarker: Boolean(marker),
+    log,
+  }) as GatewayPhase;
 
   return {
     phase,
@@ -281,6 +315,7 @@ export async function gatewayState(): Promise<GatewayState> {
     keepAlive,
     runtimeExited: Boolean(status.exited),
     logTail: log,
+    runtimeTail,
     url,
   };
 }

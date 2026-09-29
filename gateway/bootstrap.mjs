@@ -68,6 +68,15 @@ const MIN_FREE_BYTES = 1536 * 1024 * 1024;
  */
 const STALL_MS = Number(process.env.GATEWAY_DOWNLOAD_STALL_MS || '') || 120_000;
 
+/**
+ * How long to keep asking the freshly started server whether it is up.
+ *
+ * Only for the log: the app does its own waiting, and a slow first boot on a
+ * phone is normal rather than a failure. The point is that the log distinguishes
+ * "never answered" from "answered and later died".
+ */
+const HEALTH_TIMEOUT_MS = Number(process.env.GATEWAY_HEALTH_TIMEOUT_MS || '') || 10 * 60 * 1000;
+
 function mb(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
@@ -767,6 +776,31 @@ async function main() {
   } catch (err) {
     fatal(err);
   }
+
+  // The module is loaded. From here on nothing in this process writes to the
+  // gateway's log unless something goes wrong, so "did the server come up?" is
+  // otherwise unanswerable from the log alone — and on a phone the answer has to
+  // survive the process being killed, because that is exactly when someone asks.
+  log(`${entry} loaded; waiting for ${process.env.HOSTNAME}:${process.env.PORT} to answer`);
+
+  // Ask the server itself, and say so in the log. The app polls the same URL, so
+  // this is redundant for the UI and deliberate for the record: a crash report
+  // should say whether the server ever answered.
+  const healthUrl = `http://${process.env.HOSTNAME}:${process.env.PORT}/healthz`;
+  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const res = await fetch(healthUrl);
+      if (res.ok) {
+        log(`the server is answering on ${healthUrl}`);
+        return;
+      }
+    } catch {
+      // Not up yet. Keep waiting quietly: this is normal for a first boot.
+    }
+  }
+  log(`warning: ${healthUrl} did not answer within ${Math.round(HEALTH_TIMEOUT_MS / 1000)}s`);
 }
 
 /**

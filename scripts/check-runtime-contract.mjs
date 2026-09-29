@@ -292,10 +292,43 @@ check(
 );
 
 check(
-  'the app reads that file, not the raw runtime log',
-  sources.installer.includes('NodeRuntime.readFile(gatewayLogPath(), maxBytes)') &&
-    !sources.installer.includes('NodeRuntime.readLog('),
-  'the firehose (node.log) collects every writer in the app; it is for crash reports'
+  'the app reads the gateway log for state',
+  sources.installer.includes('NodeRuntime.readFile(gatewayLogPath(), maxBytes)'),
+  'the gateway writes it, and only the gateway writes it'
+);
+
+// The firehose may be read for a crash report, and must never decide state: it
+// collects every writer in the app, so a tail of it can be nothing but WebView
+// noise. Asserted on the function bodies, because "readLog appears somewhere in
+// this file" is satisfied by the display path alone.
+const bodyOf = (source, name) => {
+  const start = source.indexOf(`function ${name}(`);
+  if (start === -1) return '';
+  const next = source.indexOf('\nexport ', start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+};
+const stateLog = bodyOf(sources.installer, 'readGatewayLog');
+const displayLog = bodyOf(sources.installer, 'readRuntimeOutput');
+
+check(
+  'state never comes from the process-wide runtime log',
+  stateLog.length > 0 && !stateLog.includes('NodeRuntime.readLog('),
+  'a 64 KB tail of it can be all WebView noise, which is how an error became "nothing happened"'
+);
+
+check(
+  'the crash-report view reads it, after the last runtime start',
+  displayLog.includes('NodeRuntime.readLog(') &&
+    displayLog.includes('lastIndexOf(marker)') &&
+    sources.installer.includes('const runtimeTail = await readRuntimeOutput()'),
+  'a native death leaves its last words there and nowhere else'
+);
+
+check(
+  'the phase is decided by the runtime state, not the log alone',
+  sources.installer.includes('deriveGatewayPhase({') &&
+    !sources.installer.includes("fromLog.phase === 'starting' ||"),
+  'a log line records what happened once; it is not evidence of what is happening now'
 );
 
 // The runtime's own markers get their own file for the same reason: a 64 KB tail

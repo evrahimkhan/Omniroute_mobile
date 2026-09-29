@@ -11,6 +11,7 @@ import {
   isLocalGatewaySupported,
   localGatewayUnavailableReason,
   startLocalGateway,
+  stopLocalGateway,
   uninstallLocalGateway,
   waitForLocalGateway,
   type GatewayProgress,
@@ -36,6 +37,13 @@ export default function LocalGatewayCard({ onUse }: Props) {
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
+  /**
+   * Keep the gateway alive in the background. Default on: a gateway that stops
+   * the moment the app leaves the screen is not hosting anything. It is a
+   * choice, not a promise — the user can turn it off, and the OS shows the
+   * notification that pays for it either way.
+   */
+  const [keepAlive, setKeepAlive] = useState(true);
   const cancelled = useRef(false);
 
   const supported = isLocalGatewaySupported();
@@ -74,7 +82,7 @@ export default function LocalGatewayCard({ onUse }: Props) {
         // A first run downloads the payload over the network.
         setWaiting(true);
       }
-      await startLocalGateway();
+      await startLocalGateway({ keepAlive });
       setWaiting(true);
       const url = await waitForLocalGateway({
         onProgress: (next) => setState(next),
@@ -102,6 +110,31 @@ export default function LocalGatewayCard({ onUse }: Props) {
   const use = async () => {
     await refresh();
     onUse(LOCAL_GATEWAY_URL);
+  };
+
+  /**
+   * Stop hosting.
+   *
+   * There is no way to stop the embedded runtime from inside the process, so
+   * this ends the app — which is worth explaining before it happens rather than
+   * after.
+   */
+  const stop = () => {
+    Alert.alert(
+      'Stop hosting?',
+      'The gateway stops serving and the app closes. Your installed gateway and dashboard data are kept — open the app again to start it.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Stop',
+          style: 'destructive',
+          onPress: () => {
+            // Nothing after this runs: the process is ending by design.
+            stopLocalGateway();
+          },
+        },
+      ],
+    );
   };
 
   const remove = () => {
@@ -200,12 +233,12 @@ export default function LocalGatewayCard({ onUse }: Props) {
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed]}
-              onPress={remove}
+              onPress={stop}
               disabled={busy}
               accessibilityRole="button"
             >
-              <MaterialCommunityIcons name="delete-outline" size={17} color={theme.text} />
-              <Text style={styles.btnLabel}>Remove</Text>
+              <MaterialCommunityIcons name="stop-circle-outline" size={17} color={theme.text} />
+              <Text style={styles.btnLabel}>Stop hosting</Text>
             </Pressable>
           </>
         ) : working ? (
@@ -239,6 +272,31 @@ export default function LocalGatewayCard({ onUse }: Props) {
         )}
       </View>
 
+      {!working && phase !== 'ready' ? (
+        <Pressable
+          style={({ pressed }) => [styles.toggleRow, pressed && styles.pressed]}
+          onPress={() => setKeepAlive((v) => !v)}
+          disabled={busy}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: keepAlive }}
+          accessibilityLabel="Keep the gateway running in the background"
+        >
+          <MaterialCommunityIcons
+            name={keepAlive ? 'checkbox-marked' : 'checkbox-blank-outline'}
+            size={19}
+            color={keepAlive ? theme.accent : theme.textMuted}
+          />
+          <View style={styles.toggleText}>
+            <Text style={styles.toggleLabel}>Keep it running in the background</Text>
+            <Text style={styles.toggleNote}>
+              {keepAlive
+                ? 'A notification holds the gateway open when you leave the app. Tap it to come back, or use its Stop action.'
+                : 'The gateway stops when you leave the app. Android reclaims the process within minutes.'}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
+
       {phase === 'idle' && !state?.installed ? (
         <Text style={styles.note}>
           Downloads the gateway once, then runs it here — no server, no computer. Use Wi-Fi:
@@ -254,10 +312,34 @@ export default function LocalGatewayCard({ onUse }: Props) {
       ) : null}
 
       {phase === 'ready' ? (
-        <Text style={styles.note}>
-          Some features stay unavailable on a phone: image processing, browser automation,
-          and anything that spawns a process. The gateway notes them rather than failing.
-        </Text>
+        <>
+          {state?.keepAlive ? (
+            <Text style={styles.note}>
+              Held open by the notification, so it keeps serving with the app closed.
+            </Text>
+          ) : (
+            <Text style={styles.note}>
+              Running while the app is open. If Android stops it when you leave, reopen the app
+              and start it again with background hosting on.
+            </Text>
+          )}
+          <Text style={styles.note}>
+            Some features stay unavailable on a phone: image processing, browser automation,
+            and anything that spawns a process. The gateway notes them rather than failing.
+          </Text>
+        </>
+      ) : null}
+
+      {state?.installed && phase !== 'ready' ? (
+        <Pressable
+          style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.7 }]}
+          onPress={remove}
+          disabled={busy}
+          accessibilityRole="button"
+        >
+          <MaterialCommunityIcons name="delete-outline" size={16} color={theme.textMuted} />
+          <Text style={styles.linkLabel}>Remove it from this phone</Text>
+        </Pressable>
       ) : null}
 
       {state?.logTail ? (
@@ -326,6 +408,10 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.85 },
   btnLabel: { color: theme.text, fontWeight: '700', fontSize: 13 },
   btnLabelDark: { color: '#0b0f1a', fontWeight: '800', fontSize: 13 },
+  toggleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 2 },
+  toggleText: { flex: 1, gap: 2 },
+  toggleLabel: { color: theme.text, fontSize: 13, fontWeight: '600' },
+  toggleNote: { color: theme.textMuted, fontSize: 11, lineHeight: 15 },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   linkLabel: { color: theme.textMuted, fontSize: 13, fontWeight: '600' },
   log: {

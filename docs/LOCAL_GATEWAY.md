@@ -120,7 +120,11 @@ replace — hence the "install after the APK" flow rather than shipping it.
   the runtime on it, and polls `/healthz` until the gateway actually answers.
   The payload itself is still npm's 2.6 GB tree until the standalone build lands
   — see §5b for what that means and what replaces it.
-- **Phase 4 — UI/UX (this change).** "Host it on this phone" card
+- **Phase 5 — keep it alive (this change).** A foreground service owns the
+  process, so the gateway keeps serving with the app closed — see §5e. The card
+  gains a "keep it running in the background" choice, a **Stop hosting** action,
+  and the notification doubles as the status line.
+- **Phase 4 — UI/UX (done).** "Host it on this phone" card
   (`components/LocalGatewayCard.tsx`): availability, status, install progress,
   "Use this gateway", "Remove", and a collapsible view of the runtime log. It
   appears in Settings under **LOCAL GATEWAY**, and collapsed on the first-run
@@ -375,6 +379,62 @@ not hypothetical — the first end-to-end run against a standalone payload faile
 at `payload does not contain dist/server.js`, after a successful download and
 extract.
 
+### 5e. Keeping the gateway alive
+
+Phase 3 gets a gateway running; without more, Android reclaims the process within
+minutes of the app leaving the screen, so "hosting on the phone" would only be
+true while someone is looking at it. This phase makes it actually hold.
+
+**One foreground service, `GatewayService`.** Android's only durable way to keep
+a process alive is a foreground service with an ongoing notification. It is
+declared in the module's own manifest with `foregroundServiceType="specialUse"`
+(Android 14 requires a declared, justified type or `startForeground()` throws),
+plus `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` and
+`POST_NOTIFICATIONS` — the last one requested at runtime on Android 13+, because
+without it the notification is invisible and the user has no way to see or stop
+what the phone is doing.
+
+**The service does not own the runtime — `NodeRuntimeHost` does.** There is
+exactly one Node instance per process and it can outlive the UI, so the state
+moved out of the Expo module into a process-wide host. Both the module (the user
+tapped *Install & start*) and the service (Android restarted the process) start
+the runtime through it, and a start from one is visible to the other.
+
+**Resuming after a process kill.** A sticky foreground service can be restarted
+by Android after a low-memory kill, with no JavaScript running at all. The
+service therefore cannot rely on the app to know what to run: the start request
+(script, working directory, env, log path) is persisted to `StartPrefs` before the
+runtime starts, and read back on restart. It is cleared when the runtime exits,
+when hosting is stopped, and when a start fails — a request that outlived its
+runtime would restart a broken install on every process restart.
+
+**Stopping is honest about what it does.** nodejs-mobile has no stop API and the
+runtime thread is deliberately not a daemon, so a gateway cannot be shut down
+from inside the process. Stopping therefore ends the process
+(`Process.killProcess`), from the app or from the notification's **Stop** action;
+the card asks first and says the app will close. The installed payload and the
+dashboard data (`HOME/.omniroute`) are untouched, and the next launch starts
+cleanly.
+
+**The notification repeats the log; it does not interpret it.** Its text is the
+newest `[gateway]` line, verbatim, refreshed every few seconds — so a first-run
+download is visible from the shade without opening the app. Translating those
+lines in Kotlin would mean a second parser for the same log, which is exactly how
+the app's parser and the bootstrap drifted apart twice (§5d).
+
+**What is verified, and what is not.** Gradle compiles all of this on every APK
+build, and `npm run runtime:verify` asserts the *packaged* result: the merged
+manifest really declares the service, its type, the subtype property and the
+three permissions. `npm run runtime:contract` (App CI, no Android SDK needed)
+checks that the JS surface, the Kotlin `Function`/`AsyncFunction` names, the
+status-map keys, the manifest and the `StartPrefs` usage agree — drift that
+compiles fine and would otherwise fail only on a phone. Not verified: how a real
+Android build behaves. Background-start rules (Android 12 restricts starting a
+foreground service from the background — satisfied here, because hosting is
+always started from a visible screen) and OEM battery managers that kill
+foreground services (Xiaomi, Huawei and Samsung are the usual offenders) are the
+open risks.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:
@@ -393,7 +453,8 @@ These are expected degradations; the UI must say so rather than pretend:
 | Risk | Mitigation |
 |---|---|
 | `digidem/nodejs-mobile` is a young, low-adoption fork (2 stars at time of writing) | Pin the exact release + verify the artifact checksum in CI; the build recipe is reproducible from upstream Node (`scripts/prepare.sh`), so we can rebuild it ourselves if it stalls. |
-| Untested on a real device | Every part of phases 1–3 that a machine *can* verify is verified (CI builds the native code and checks the APK's contents; the installer is exercised end to end against the real payload), but nothing has run inside an Android app process yet. That is the next milestone, and it is a hardware one. |
+| Untested on a real device | Every part of phases 1–5 that a machine *can* verify is verified (CI builds the native code and checks the APK's contents, including the merged manifest's foreground-service declarations; the installer is exercised end to end against the real payload; the JS↔Kotlin↔manifest contract is asserted in App CI), but nothing has run inside an Android app process yet. That is the next milestone, and it is a hardware one. |
+| Android may still stop the gateway | A foreground service is the strongest thing an app can do, not a guarantee: OEM battery managers (Xiaomi, Huawei, Samsung) kill them anyway, and so can the user. The card reports the real state (`keepAlive`, read from the service) instead of assuming, and the runtime log keeps the reason. |
 | First-run download is big | Partly solved. §5b's pipeline packs the tree in CI — the packaged npm tree comes to 115.6 MB gzipped, and the standalone build it is meant to carry is smaller — and the digest is published next to it, so the app verifies what it downloads. Until the job is dispatched, "install" still means npm's tree, so treat it as Wi-Fi-only. |
 | The app and the payload drift apart | The bootstrap is the app's contract with the payload; it is versioned with the app, but the payload URL is not pinned to a version yet, so "latest" can move under an installed app. Pinning both to one release is part of the CI job in §5b. |
 | Native exec from app storage | Avoided entirely — the runtime lives in the APK's lib dir. |

@@ -16,6 +16,7 @@ import type {
   NodeRuntimeEvents,
   NodeRuntimeStatus,
   StartOptions,
+  StopReason,
 } from './src/NodeRuntime.types';
 
 declare class NodeRuntimeModule extends NativeModule<NodeRuntimeEvents> {
@@ -51,8 +52,16 @@ declare class NodeRuntimeModule extends NativeModule<NodeRuntimeEvents> {
   readLog(maxBytes: number): Promise<string>;
   /** Truncate the runtime log. */
   clearLog(): Promise<void>;
+  /**
+   * End the gateway, including the foreground service holding the process.
+   *
+   * The runtime itself cannot be shut down in-process (nodejs-mobile has no
+   * stop API), so this ends the app process. Nothing after it runs; the app
+   * starts cleanly the next time it is opened.
+   */
+  stopHosting(reason: string): void;
 }
 
 export default requireNativeModule<NodeRuntimeModule>('NodeRuntime');
 
-export type { NodePaths, NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };
+export type { NodePaths, NodeRuntimeEvents, NodeRuntimeStatus, StartOptions, StopReason };

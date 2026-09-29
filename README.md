@@ -73,9 +73,11 @@ OmniRoute's own Electron desktop app and PWA. The gateway does the routing
 3. **Connect**: open the app → enter your gateway URL → **Test** → **Connect** → sign in to
    the dashboard once. All 88 features are under `More → All Features` (with search).
 
-> Self-hosted on a LAN? Use `http://<machine-ip>:20128` (plain HTTP on Wi-Fi works; the
-> gateway serves the dashboard over HTTP). For remote access put it behind a reverse proxy
-> with TLS, or use a tunnel.
+> Self-hosted on a LAN? Use `http://<machine-ip>:20128` — the app opts in to cleartext
+> traffic (`usesCleartextTraffic`, in `app.json`), because the gateway serves the dashboard
+> over plain HTTP. Android allows cleartext to loopback by default, so the on-device gateway
+> does not depend on that setting; a LAN gateway does. For remote access put it behind a
+> reverse proxy with TLS, or use a tunnel.
 
 ## Local gateway (hosting OmniRoute on the phone)
 
@@ -105,6 +107,13 @@ How it fits together:
   bundled WASM, and native addons (`sharp`, `onnxruntime-node`, …) are lazily
   imported behind `try/catch`, so their absence degrades features rather than
   breaking the server.
+- **It keeps running when you leave the app.** A foreground service
+  (`GatewayService`, in `modules/node-runtime`) holds the process, so the gateway
+  keeps serving with the app closed; Android shows a notification carrying the
+  newest line the gateway printed and a **Stop** action, and if the OS recreates
+  the process the service resumes the runtime from the request it persisted. The
+  card has the switch, and stopping ends the process — the runtime cannot be shut
+  down in-process, and the card says so before it does it.
 - **Installing happens inside the runtime, not in the app.**
   `gateway/bootstrap.mjs` downloads the payload, verifies its checksum, unpacks
   it, and boots it — the runtime already has `fetch`/`crypto`/`zlib`, so the app
@@ -116,13 +125,16 @@ How it fits together:
   start the runtime on it, then poll `/healthz` until the gateway answers — so
   the URL saved into settings is one that actually responds.
 
-> Status: all four phases are implemented — runtime packaging, the JNI bridge,
-> the install flow, and the UI ("Host it on this phone" in Settings, or on the
-> first-run screen). Everything a machine without a phone can verify *is*
+> Status: all five phases are implemented — runtime packaging, the JNI bridge,
+> the install flow, the UI ("Host it on this phone" in Settings, or on the
+> first-run screen), and the foreground service that keeps the gateway serving
+> with the app closed. Everything a machine without a phone can verify *is*
 > verified: CI compiles the native code with the NDK and checks what the APK
-> contains, the installer was exercised end to end against the real published
-> payload (byte-identical to system `tar`, then a real boot), and the installer's
-> log lines are asserted against the app's parser.
+> contains (runtime, JNI bridge, and the merged manifest's service declarations),
+> the installer was exercised end to end against the real published payload
+> (byte-identical to system `tar`, then a real boot), the installer's log lines
+> are asserted against the app's parser, and the JS↔Kotlin↔manifest contract has
+> its own gate.
 >
 > Two known gaps, both honest ones:
 >
@@ -138,7 +150,7 @@ How it fits together:
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| **App CI** (`app-ci.yml`) | every push to `arena/01a0e9f8-omniroute-mobile` + every PR | workflow-file audit + typecheck + Hermes bundle, plus the gateway gates: bootstrap freshness, log contract, payload round-trip, installer installs and boots both payload shapes |
+| **App CI** (`app-ci.yml`) | every push to `arena/01a0e9f8-omniroute-mobile` + every PR | workflow-file audit + typecheck + Hermes bundle, plus the gateway gates: bootstrap freshness, log contract, payload round-trip, installer installs and boots both payload shapes, and the JS↔Kotlin↔manifest runtime contract |
 | **Build Android APK** (`android-apk.yml`) | push to `arena/01a0e9f8-omniroute-mobile` + **manual dispatch** (`version`, `create_release`) | `OmnirouteMobile-v<version>-b<build>.apk` artifact + **GitHub Release** |
 | **Build OmniRoute source** (`omniroute-web.yml`) | **manual dispatch** (`ref`, `docker`, `dockerhub` inputs) | `omniroute-build-<sha>.tar.gz` artifact (`.build/` + `dist/` — same layout as upstream's build) + Docker image `ghcr.io/<owner>/omniroute-mobile:sha-<sha>` / `:main` (+ Docker Hub if secrets set) |
 | **Build iOS (EAS)** (`ios-eas.yml`) | **manual dispatch** (`profile`, `submit`) | IPA on EAS (skipped unless `EAS_TOKEN` secret exists) |

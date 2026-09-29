@@ -24,6 +24,11 @@ export interface NodeRuntimeStatus {
   logFilePath: string | null;
   /** The app's process id — node runs in-process, so this is shared. */
   pid: number;
+  /**
+   * A foreground service is holding the process so the gateway keeps serving
+   * with the app closed.
+   */
+  keepAlive: boolean;
 }
 
 export interface StartOptions {
@@ -39,6 +44,12 @@ export interface StartOptions {
   logFilePath?: string;
   /** V8 needs a deep stack; clamped to 2–64 MB. Defaults to 8. */
   stackSizeMb?: number;
+  /**
+   * Keep the gateway running while the app is in the background, by starting a
+   * foreground service that holds the process. The user sees a notification
+   * (Android requires it) with a **Stop** action. Defaults to false.
+   */
+  foreground?: boolean;
 }
 
 export interface NodeExitEvent {
@@ -62,3 +73,9 @@ export interface NodePaths {
 export type NodeRuntimeEvents = {
   onExit: (event: NodeExitEvent) => void;
 };
+
+/**
+ * Why hosting stopped, when it was not the runtime failing on its own. Passed
+ * to `stopHosting()` so the reason is written to the runtime log.
+ */
+export type StopReason = string;

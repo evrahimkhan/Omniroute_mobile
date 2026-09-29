@@ -1,2 +1,26 @@
-<manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!--
+    The gateway has to keep serving while the app is in the background, which
+    only a foreground service can do. `specialUse` is the honest type here: this
+    is not a data transfer that ends, it is a local server the user is running
+    on their own device. Android 14+ requires the type to be declared in the
+    manifest (and a matching permission), otherwise startForeground() throws.
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <!-- Android 13+ hides the notification without this; the service still runs. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <service
+      android:name=".GatewayService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="local_gateway_server" />
+    </service>
+  </application>
+
 </manifest>

@@ -20,6 +20,8 @@
  * See docs/LOCAL_GATEWAY.md for the design and its constraints.
  */
 
+import { PermissionsAndroid, Platform } from 'react-native';
+
 import NodeRuntime from '../modules/node-runtime';
 import { BOOTSTRAP_SCRIPT } from './gateway/bootstrapScript.generated';
 import { describeGatewayLog, gatewayLogTail, type GatewayProgress } from './gatewayLog';
@@ -84,6 +86,11 @@ export type GatewayPhase =
 
 export interface GatewayState {
   phase: GatewayPhase;
+  /**
+   * A foreground service is holding the process, so the gateway keeps serving
+   * with the app closed.
+   */
+  keepAlive: boolean;
   /** A payload is installed and looks complete. */
   installed: boolean;
   /** When the payload was installed (marker's timestamp). */
@@ -107,7 +114,20 @@ export interface StartGatewayOptions {
   force?: boolean;
   /** Defaults to {@link LOCAL_GATEWAY_PORT}. */
   port?: number;
+  /**
+   * Keep the gateway running while the app is in the background. Defaults to
+   * true, because a gateway that stops when the app is not on screen is not
+   * really hosting anything — the user can turn it off.
+   */
+  keepAlive?: boolean;
 }
+
+/**
+ * Shown when hosting stops because the runtime cannot be shut down in-process:
+ * nodejs-mobile has no stop API, so stopping means ending the process.
+ */
+export const STOPPED_REASON =
+  'The gateway process was stopped. Reopen the app to start it again.';
 
 export function isLocalGatewaySupported(): boolean {
   return NodeRuntime.isAvailable();
@@ -164,6 +184,7 @@ export async function gatewayState(): Promise<GatewayState> {
       phase: 'unavailable',
       installed: false,
       installedAt: null,
+      keepAlive: false,
       logTail: '',
       error: localGatewayUnavailableReason() ?? undefined,
       url,
@@ -171,6 +192,7 @@ export async function gatewayState(): Promise<GatewayState> {
   }
 
   const status = NodeRuntime.getStatus();
+  const keepAlive = Boolean(status.keepAlive);
   const marker = await readMarker();
   const log = await readGatewayLog();
   const fromLog = describeGatewayLog(log);
@@ -180,6 +202,7 @@ export async function gatewayState(): Promise<GatewayState> {
       phase: 'failed',
       installed: Boolean(marker),
       installedAt: marker?.installedAt ?? null,
+      keepAlive: false,
       logTail: log,
       error:
         fromLog.error ??
@@ -197,9 +220,31 @@ export async function gatewayState(): Promise<GatewayState> {
     phase,
     installed: Boolean(marker),
     installedAt: marker?.installedAt ?? null,
+    keepAlive,
     logTail: log,
     url,
   };
+}
+
+/**
+ * Ask for the permission the keep-alive notification needs on Android 13+.
+ *
+ * Denial is not fatal — the foreground service still runs, it just cannot show
+ * its notification, and the notification is how the user sees that the phone is
+ * hosting something (and how they stop it). So this asks, then carries on
+ * either way rather than blocking the install on an answer.
+ */
+async function requestNotificationPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return true;
+  try {
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    // Some ROMs throw instead of answering; the service is unaffected.
+    return false;
+  }
 }
 
 /**
@@ -238,6 +283,8 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
     GATEWAY_PORT: String(port),
     GATEWAY_HOST: '127.0.0.1',
   };
+  if (options.keepAlive ?? true) await requestNotificationPermission();
+
   if (payloadUrl) env.GATEWAY_PAYLOAD_URL = payloadUrl;
   // A pinned digest wins; otherwise let the bootstrap fetch the published
   // manifest, so a download that arrives corrupt is still caught.
@@ -250,7 +297,20 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
     workingDirectory: paths.gatewayDir,
     logFilePath: paths.logFilePath,
     env,
+    foreground: options.keepAlive ?? true,
   });
+}
+
+/**
+ * Stop hosting and release the process.
+ *
+ * Nothing after this runs: the runtime cannot be stopped in-process, so the
+ * only way to stop a gateway is to end the app. Callers should warn first (the
+ * card asks for confirmation) and must not await anything after it.
+ */
+export function stopLocalGateway(reason: string = STOPPED_REASON): void {
+  if (!NodeRuntime.isAvailable()) return;
+  NodeRuntime.stopHosting(reason);
 }
 
 export interface WaitForGatewayOptions {

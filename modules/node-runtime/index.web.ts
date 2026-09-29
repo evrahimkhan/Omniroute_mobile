@@ -24,6 +24,7 @@ const STATUS: NodeRuntimeStatus = {
   startedAt: null,
   logFilePath: null,
   pid: -1,
+  keepAlive: false,
 };
 
 const stub = {
@@ -50,6 +51,7 @@ const stub = {
   },
   readFile: async (): Promise<string | null> => null,
   deleteDir: async (): Promise<boolean> => false,
+  stopHosting: (): void => {},
   addListener: () => ({ remove: () => {} }),
   removeAllListeners: () => {},
 } satisfies Record<string, unknown>;
@@ -67,6 +69,7 @@ export default stub as unknown as {
   writeFile(path: string, contents: string): Promise<string>;
   readFile(path: string, maxBytes: number): Promise<string | null>;
   deleteDir(path: string): Promise<boolean>;
+  stopHosting(reason: string): void;
 } & NodeRuntimeEvents;
 
 export type { NodePaths, NodeRuntimeEvents, NodeRuntimeStatus, StartOptions };

@@ -10,13 +10,18 @@
  * `lib*.so` gets discarded by the packager, a missing jniLibs directory, a
  * mistyped ABI) would still produce a "successful" APK — hence this check.
  *
+ * It also checks the *keep-alive* half of the same feature: the merged manifest
+ * must declare the foreground service (and its Android-14 type + permissions),
+ * because a manifest problem fails at runtime — on a phone, at startForeground —
+ * and never in a Gradle build.
+ *
  * Usage:
  *   node scripts/assert-apk-runtime.mjs <apk> [--abis arm64-v8a,armeabi-v7a]
  */
 
 import { readFileSync, statSync } from 'node:fs';
 
-import { listEntries } from './lib/minizip.mjs';
+import { extractEntry, listEntries } from './lib/minizip.mjs';
 
 const DEFAULT_ABIS = ['arm64-v8a', 'armeabi-v7a'];
 
@@ -31,6 +36,60 @@ function parseArgs(argv) {
 
 function human(bytes) {
   return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * Is `text` in the APK's binary AndroidManifest.xml?
+ *
+ * The manifest is compiled AXML, not text, but its string pool keeps the
+ * literals — as UTF-8 in aapt2's default encoding, and historically as UTF-16.
+ * Both are searched rather than assumed, because a miss here would look like a
+ * missing declaration.
+ */
+function manifestContains(manifest, text) {
+  return (
+    manifest.includes(Buffer.from(text, 'utf8')) ||
+    manifest.includes(Buffer.from(text, 'utf16le'))
+  );
+}
+
+/**
+ * The gateway keeps serving with the app closed only because a foreground
+ * service holds the process (docs/LOCAL_GATEWAY.md §5e). None of that is
+ * visible to a Gradle build until it runs on a phone: a service that is not
+ * declared, or a missing Android-14 foreground-service type, throws at
+ * `startForeground()` — so the packaging is asserted here instead.
+ */
+function checkGatewayService(entries, apk) {
+  const problems = [];
+  const manifestEntry = entries.find((e) => e.name === 'AndroidManifest.xml');
+  if (!manifestEntry) {
+    return ['the APK has no AndroidManifest.xml (not an APK?)'];
+  }
+
+  const manifest = extractEntry(apk, manifestEntry);
+  const declarations = [
+    ['the gateway service', 'GatewayService'],
+    ['its foreground-service type', 'specialUse'],
+    ['the subtype property Android 14 wants', 'PROPERTY_SPECIAL_USE_FGS_SUBTYPE'],
+    ['the foreground-service permission', 'android.permission.FOREGROUND_SERVICE'],
+    ['the special-use permission', 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE'],
+    ['the notification permission', 'android.permission.POST_NOTIFICATIONS'],
+    // Only presence is checked: the value lives in binary XML and parses as an
+    // attribute, not a string. Presence still catches the real failure — a
+    // build-properties key that never reached the merged manifest — which is
+    // what would silently break LAN gateways and self-hosted HTTP servers.
+    ['the cleartext opt-in (LAN gateways are plain HTTP)', 'usesCleartextTraffic'],
+  ];
+
+  for (const [label, needle] of declarations) {
+    if (manifestContains(manifest, needle)) {
+      process.stdout.write(`  ✓ ${label}\n`);
+    } else {
+      problems.push(`${label} is not in the merged manifest (${needle})`);
+    }
+  }
+  return problems;
 }
 
 function main() {
@@ -73,6 +132,8 @@ function main() {
     process.stdout.write(`  ✓ ${wanted}  ${human(found.uncompSize)}\n`);
   }
 
+  problems.push(...checkGatewayService(entries, buf));
+
   if (problems.length) {
     process.stderr.write(`\n✖ the APK is missing embedded runtime pieces:\n  ${problems.join('\n  ')}\n`);
     process.stderr.write(
@@ -88,7 +149,7 @@ function main() {
     process.exit(1);
   }
 
-  process.stdout.write('✓ APK carries the embedded Node runtime and the JNI bridge\n');
+  process.stdout.write('✓ APK carries the embedded Node runtime, the JNI bridge and the keep-alive service\n');
 }
 
 try {

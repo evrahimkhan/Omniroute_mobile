@@ -11,7 +11,8 @@
 #   6. npm run payload:test  (the packer's tar.gz survives the on-device extractor)
 #   7. npm run payload:install-test  (the installer downloads, verifies, unpacks
 #      and boots both payload shapes over loopback — the chain the phone runs)
-#   8. expo export           (Metro/Hermes bundle → proves routing + imports)
+#   8. npm run runtime:contract  (the JS, Kotlin and manifest surfaces agree)
+#   9. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -83,6 +84,11 @@ jobs:
 
       - name: Check the installer installs and boots both payload shapes
         run: npm run payload:install-test
+
+      # Gradle compiles the Kotlin; nothing compiles the *names* the JS side
+      # calls it by, and a manifest typo only shows up on a phone.
+      - name: Check the runtime contract (JS ⇄ Kotlin ⇄ manifest)
+        run: npm run runtime:contract
 
       - name: Typecheck
         run: npx tsc --noEmit

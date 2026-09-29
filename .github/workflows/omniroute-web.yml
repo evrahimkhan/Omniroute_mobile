@@ -159,26 +159,42 @@ jobs:
         working-directory: source/OmniRoute
         run: |
           set -uo pipefail
-          # Find it rather than assume it: the location depends on distDir and
-          # outputFileTracingRoot, both of which this project sets.
+          # Find it rather than assume it: this project sets distDir and
+          # outputFileTracingRoot, and `colocate-standalone.mjs` moves the tree after
+          # the build, so the same payload can sit at `.build/next/standalone`,
+          # `dist/.build/.../standalone` or `.next/standalone`. Vendored trees are
+          # pruned rather than merely filtered, because node_modules is 125k files.
           mapfile -t dirs < <(
-            find .build -name server.js -not -path '*/node_modules/*' -printf '%h\n' 2>/dev/null | sort -u
+            find . -maxdepth 8 \
+              \( -name node_modules -o -name .git -o -name .next -o -name __pycache__ \) -prune -o \
+              -name server.js -printf '%h\n' 2>/dev/null | sort -u
           )
-          printf 'standalone candidates:\n'; printf '  %s\n' "${dirs[@]:-<none>}"
+          printf 'server.js candidates:\n'; printf '  %s\n' "${dirs[@]:-<none>}"
 
           if [ "${#dirs[@]}" -eq 0 ]; then
-            echo "::error title=No standalone server output::next build did not produce output/'standalone'. Listing what it did produce, to fix this in one go."
-            find .build -maxdepth 2 -type d 2>/dev/null | head -30
+            echo "::error title=No standalone server output::next build produced no server.js outside node_modules, so there is nothing to package. Listing the build outputs to fix this in one go."
+            find . -maxdepth 3 -type d \( -name .build -o -name dist -o -name .next -o -name standalone \) 2>/dev/null | head -30
             exit 1
           fi
 
-          # Prefer a candidate that carries its own node_modules — that is what
-          # makes the payload self-contained.
-          chosen="${dirs[0]}"
+          # Rank the candidates: a Next standalone tree has `.next/BUILD_ID`, and a
+          # usable payload carries its own node_modules. Neither test decides on its
+          # own, so they only order the choice: the boot check below is the one that
+          # decides whether the payload works, and it is the one that can publish.
+          chosen=""
           for dir in "${dirs[@]}"; do
-            if [ -d "$dir/node_modules" ]; then chosen="$dir"; break; fi
+            if [ -e "$dir/.next/BUILD_ID" ] && [ -d "$dir/node_modules" ]; then chosen="$dir"; break; fi
           done
+          if [ -z "$chosen" ]; then
+            for dir in "${dirs[@]}"; do
+              if [ -d "$dir/node_modules" ]; then chosen="$dir"; break; fi
+            done
+          fi
+          if [ -z "$chosen" ]; then chosen="${dirs[0]}"; fi
           echo "chosen: $chosen"
+          if [ ! -e "$chosen/.next/BUILD_ID" ]; then
+            echo "::warning title=Not a Next standalone tree::$chosen has no .next/BUILD_ID; the boot check below will decide whether it is usable."
+          fi
           if [ ! -d "$chosen/node_modules" ]; then
             echo "::warning title=Standalone output has no node_modules::The payload will be missing dependencies; the boot check below will decide whether it is usable."
           fi

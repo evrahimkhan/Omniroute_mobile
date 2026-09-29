@@ -231,10 +231,14 @@ Consequences, recorded now so the next step does not rediscover them — and
 build job, gated by the workflow's `payload` input (on by default):
 
 1. *Locate the standalone server* — `next build` puts the output wherever the
-   build script was pointed, so the step searches for a directory that contains
-   `server.js`, prefers one with its own `node_modules`, and prints what it
-   found. A build with no standalone output fails here, with a listing of what
-   the build *did* produce, rather than half an hour later in the publish step.
+   build script was pointed, and `colocate-standalone.mjs` moves it afterwards,
+   so the step searches the whole checkout for a directory containing
+   `server.js` (pruning vendored trees, which are 125k files) and ranks the
+   candidates: `.next/BUILD_ID` plus its own `node_modules` first, then
+   `node_modules` alone. Both tests are only a preference — the boot check
+   decides — but a candidate missing them is warned about by name. A build with
+   no `server.js` at all fails here, listing what the build *did* produce,
+   rather than half an hour later in the publish step.
 2. *Pack the gateway payload* — `scripts/pack-payload.mjs` writes
    `omniroute-payload.tar.gz` plus a `…tar.gz.json` manifest
    (`{entry, sha256, bytes, uncompressedBytes, files}`). The writer is

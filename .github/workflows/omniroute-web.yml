@@ -19,15 +19,30 @@
 # The Android APK workflow (android-apk.yml) builds the native mobile shell;
 # this workflow produces the compiled source it connects to.
 #
-# NOTE: intentionally manual-only. OmniRoute's own project disabled hosted
-# push triggers for this exact build (upstream #11946): the hosted 7 GB
-# runner OOMs `next build` of this tree in the majority of attempts even
-# with the 10 GB swap step below. Run it on demand from the Actions tab —
-# it is cheap (public repo = free minutes) and always produces the artifact.
+# Triggering: manual, plus a push that changes the payload pipeline itself.
+#
+# The push trigger exists because `workflow_dispatch` alone cannot be relied
+# on for the payload: the "Run workflow" form is generated from the *default
+# branch's* copy of this file, and that copy predates the `payload` input — so
+# a dispatch can arrive with the input unset, publish nothing, and leave the
+# app unable to install with no clue why. Gating the payload steps on the event
+# as well as the input removes that dependency. It is deliberately narrowed to
+# the payload's own files, so ordinary pushes do not rebuild 116 MB of payload.
+#
+# NOTE: OmniRoute's own project disabled hosted push triggers for this exact
+# build (upstream #11946): the hosted 7 GB runner OOMs `next build` of this
+# tree in the majority of attempts even with the 10 GB swap step below. That is
+# why the trigger is narrow rather than "on push".
 # =============================================================================
 name: Build OmniRoute source
 
 on:
+  push:
+    branches: [arena/01a0e9f8-omniroute-mobile]
+    paths:
+      - .github/workflows/omniroute-web.yml
+      - scripts/pack-payload.mjs
+      - scripts/check-payload-pack.mjs
   workflow_dispatch:
     inputs:
       ref:
@@ -155,7 +170,7 @@ jobs:
       # =====================================================================
       - name: Locate the standalone server
         id: standalone
-        if: ${{ inputs.payload }}
+        if: ${{ github.event_name == 'push' || inputs.payload }}
         working-directory: source/OmniRoute
         run: |
           set -uo pipefail
@@ -207,7 +222,7 @@ jobs:
 
       - name: Pack the gateway payload
         id: pack
-        if: ${{ inputs.payload }}
+        if: ${{ github.event_name == 'push' || inputs.payload }}
         working-directory: source/OmniRoute
         run: |
           node ../../scripts/pack-payload.mjs "${{ steps.standalone.outputs.dir }}" \
@@ -218,7 +233,7 @@ jobs:
       # Extract and boot exactly what the app will download, then ask it for
       # /healthz. If this fails, the payload is not published.
       - name: Boot the payload before publishing it
-        if: ${{ inputs.payload }}
+        if: ${{ github.event_name == 'push' || inputs.payload }}
         run: |
           set -uo pipefail
           rm -rf /tmp/payload-check /tmp/payload-home /tmp/payload-tmp
@@ -261,7 +276,7 @@ jobs:
           fi
 
       - name: Publish the gateway payload
-        if: ${{ inputs.payload }}
+        if: ${{ github.event_name == 'push' || inputs.payload }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -303,7 +318,7 @@ jobs:
           cat "$manifest"
 
       - name: Upload the payload as an artifact too
-        if: ${{ inputs.payload }}
+        if: ${{ github.event_name == 'push' || inputs.payload }}
         uses: actions/upload-artifact@v7
         with:
           name: omniroute-payload-${{ steps.fetch.outputs.sha }}

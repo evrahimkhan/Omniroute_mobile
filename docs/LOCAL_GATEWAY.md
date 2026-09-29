@@ -735,9 +735,17 @@ Android keeps the reason. `ApplicationExitInfo` (API 30+) records, per app, how
 each past process ended and why: `REASON_LOW_MEMORY`, `REASON_CRASH_NATIVE`
 (with the signal), `REASON_CRASH`, `REASON_ANR`, `REASON_SIGNALED`,
 `REASON_EXCESSIVE_RESOURCE_USAGE`, and so on, plus the time and whether the
-process was foreground at the time. `NodeRuntimeHost.previousExit()` reads it and
-the card shows it under **"How the last run ended"** — above the logs, because it
-answers the question everyone actually has.
+process was foreground. `NodeRuntimeHost.previousExit()` asks for the app's own
+history (`ActivityManager.getHistoricalProcessExitReasons`) and the card shows the
+newest abnormal record under **"Last abnormal exit"** — above the logs, because
+that is the question everyone actually has.
+
+The wording carries the time the exit happened and claims no more than that: a
+normal exit does not clear the history, so the record can be older than the last
+run. One platform bug is worth knowing while reading it — on Android 11 a query
+for the app's *own* package comes back empty unless the app holds
+`PACKAGE_USAGE_STATS`; 12 and later answer normally, and an empty answer is
+treated as "nothing to report".
 
 Two decisions in it worth naming:
 
@@ -749,7 +757,8 @@ Two decisions in it worth naming:
     diagnostic, and this one runs during app startup.
 
 It is carried as `NodeRuntimeStatus.previousExit` → `GatewayState.previousExit`,
-and `runtime:contract` asserts the whole chain (the Android read, the filter,
+and `runtime:contract` asserts the whole chain (the Android read - by name, the
+filter,
 the status-map entry, the TS type, the app's pass-through), plus the API guard.
 Removing the status-map entry fails two checks.
 

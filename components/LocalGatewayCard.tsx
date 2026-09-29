@@ -392,14 +392,13 @@ export default function LocalGatewayCard({ onUse }: Props) {
       ) : null}
 
       {/*
-        Android's own account of how the last run ended, when it was not ordinary.
-        Shown above the logs because it is the answer to "the app just
-        disappeared", and it is the one piece of evidence a killed process cannot
-        leave behind itself.
+        Android's own account of the last abnormal exit. Shown above the logs
+        because it is the answer to "the app just disappeared", and the one piece
+        of evidence a killed process cannot leave behind itself.
       */}
       {state?.previousExit ? (
         <>
-          <Text style={styles.logLabel}>How the last run ended</Text>
+          <Text style={styles.logLabel}>Last abnormal exit</Text>
           <Text style={styles.log}>{state.previousExit}</Text>
         </>
       ) : null}

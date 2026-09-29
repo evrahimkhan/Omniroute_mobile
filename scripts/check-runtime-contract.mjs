@@ -340,7 +340,7 @@ check(
 
 check(
   'the app asks Android why the previous run ended',
-  sources.host.includes('manager.historicalProcessExitInfos') &&
+  sources.host.includes('getHistoricalProcessExitReasons(context.packageName, 0, 16)') &&
     /\.reason != ApplicationExitInfo\.REASON_USER_REQUESTED/.test(sources.host) &&
     sources.host.includes('"previousExit" to context?.let { previousExit(it) }') &&
     sources.types.includes('previousExit: string | null;') &&

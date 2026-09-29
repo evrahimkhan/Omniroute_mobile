@@ -159,8 +159,8 @@ internal object NodeRuntimeHost {
   }
 
   /**
-   * Why the *previous* run of this app ended, as Android recorded it — or null
-   * when the last end was ordinary.
+   * Why this app last ended abnormally, as Android recorded it — or null when
+   * there is nothing abnormal to report.
    *
    * This is the answer to "the app just disappeared". A process killed for
    * memory, killed by a native crash, or killed for excessive resource use writes
@@ -170,7 +170,10 @@ internal object NodeRuntimeHost {
    * the difference between guessing at memory pressure and being told.
    *
    * Only abnormal endings are reported: "the user swiped it away" is not news,
-   * and reporting it would bury the line that matters.
+   * and reporting it would bury the line that matters. A normal exit does *not*
+   * clear the history, so the record can be older than the last run — which is
+   * why the sentence carries the time it happened instead of claiming to be the
+   * last run.
    */
   fun previousExit(context: Context): String? {
     if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return null
@@ -179,10 +182,20 @@ internal object NodeRuntimeHost {
 
   private fun previousExitFrom(context: Context): String? {
     val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return null
-    val infos = manager.historicalProcessExitInfos ?: return null
-    val info = infos.firstOrNull {
-      it.reason != ApplicationExitInfo.REASON_USER_REQUESTED && it.reason != ApplicationExitInfo.REASON_OTHER
-    } ?: return null
+    // (package, pid, maxNum): this app's own history, every pid, at most sixteen
+    // records. The system keeps a short list per package, so the bound is nominal.
+    //
+    // Android 11 has a known bug where a query for the app's *own* package comes
+    // back empty unless the app holds PACKAGE_USAGE_STATS; 12 and later answer
+    // normally. Either way an empty list simply means there is nothing to report.
+    val infos = manager.getHistoricalProcessExitReasons(context.packageName, 0, 16) ?: return null
+    // The newest abnormal end, whatever order the system handed them over in.
+    val info = infos
+      .filter {
+        it.reason != ApplicationExitInfo.REASON_USER_REQUESTED && it.reason != ApplicationExitInfo.REASON_OTHER
+      }
+      .maxByOrNull { it.timestamp }
+      ?: return null
 
     val whenText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(info.timestamp))
     val why = when (info.reason) {
@@ -202,7 +215,7 @@ internal object NodeRuntimeHost {
       "while it was in the background"
     }
     val description = info.description?.takeIf { it.isNotBlank() }?.let { " — ${it.trim()}" } ?: ""
-    return "the previous run ended $whenText: $why ($where)$description"
+    return "the last abnormal exit was $whenText: $why ($where)$description"
   }
 
   fun gatewayDir(context: Context): File = File(context.filesDir, DIR_NAME)

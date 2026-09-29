@@ -135,7 +135,7 @@ export interface GatewayState {
    */
   runtimeExited: boolean;
   /**
-   * How the *previous* run of the app ended, when it ended abnormally.
+   * Android's account of the last abnormal exit, when there is one.
    *
    * The only account of a process the system killed: such a process writes
    * nothing to any log before it is gone. Android keeps the reason, so the card

@@ -12,7 +12,13 @@
   <!-- Android 13+ hides the notification without this; the service still runs. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-  <application>
+  <application android:largeHeap="true">
+    <!--
+      largeHeap is not a licence to be wasteful: it raises the per-process limit
+      Android enforces, and a Next.js standalone server booting on a phone is
+      exactly the case it exists for. A runtime killed for memory leaves no
+      message anywhere, so the alternative is a crash nobody can explain.
+    -->
     <service
       android:name=".GatewayService"
       android:exported="false"

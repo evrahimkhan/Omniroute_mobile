@@ -220,6 +220,12 @@ async function main() {
       )
     );
     check(
+      'a memory line alone is not proof the script was handed over',
+      describeRuntimeExit(0, '[node-runtime] memory: heap limit 512 MB, used 30 MB').includes(
+        'without starting the gateway script'
+      )
+    );
+    check(
       'an exit with no runtime marker says the script was never started',
       describeRuntimeExit(0, '[0929/175611:INFO:android_webview] seed loader noise').includes(
         'without starting the gateway script'
@@ -275,7 +281,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 25} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${CASES.length * 2 + 26} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

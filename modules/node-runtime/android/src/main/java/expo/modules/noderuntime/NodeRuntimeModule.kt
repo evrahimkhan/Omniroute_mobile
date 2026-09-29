@@ -189,25 +189,37 @@ class NodeRuntimeModule : Module() {
     // something that never ran.
     if (keepAlive) StartPrefs.save(context, request)
 
+    // The service goes first, so the process is foreground *while* the payload
+    // boots. That boot is the most memory-hungry thing this app ever does, and an
+    // Android process that is not foreground is the first one the system
+    // reclaims. A service that cannot start (an oversize request, a
+    // background-start restriction on some ROM) is a degraded outcome — hosting
+    // only while the app is open — not a failed install, so it is logged and the
+    // start carries on.
+    var serviceStarted = false
+    if (keepAlive) {
+      serviceStarted =
+        runCatching { GatewayService.start(context) }
+          .onFailure { error ->
+            NodeRuntimeHost.appendToLog(
+              logFilePath,
+              "[gateway] warning: could not start the background service (${error.message}); " +
+                "the gateway runs only while the app is open"
+            )
+          }
+          .isSuccess
+    }
+
     try {
       NodeRuntimeHost.start(context, request)
     } catch (t: Throwable) {
-      if (keepAlive) StartPrefs.clear(context)
-      throw t
-    }
-
-    if (keepAlive) {
-      // The runtime is already running at this point, so a service that cannot
-      // start (an oversize request, a background-start restriction on some ROM)
-      // is a degraded outcome — hosting until the app is closed — not a failed
-      // install. Say so in the log and carry on.
-      runCatching { GatewayService.start(context) }.onFailure { error ->
-        NodeRuntimeHost.appendToLog(
-          logFilePath,
-          "[gateway] warning: could not start the background service (${error.message}); " +
-            "the gateway runs only while the app is open"
-        )
+      // Nothing is hosting, so leave nothing behind: no saved request, and no
+      // notification claiming this phone is serving.
+      if (keepAlive) {
+        StartPrefs.clear(context)
+        if (serviceStarted) runCatching { GatewayService.abandon(context) }
       }
+      throw t
     }
 
     return NodeRuntimeHost.status(context)

@@ -192,7 +192,7 @@ export function gatewayNeverRan(log: string): boolean {
 export function describeRuntimeExit(exitCode: number | null, log: string): string {
   const code = `code ${exitCode ?? 'unknown'}`;
   if (!gatewayNeverRan(log)) return `The embedded runtime exited (${code}).`;
-  if (log.includes('[node-runtime]')) {
+  if (log.includes('[node-runtime] starting node')) {
     return (
       `The embedded runtime exited (${code}) after starting the gateway script, which printed ` +
       `nothing at all — the script in the app and the runtime's view of it disagree. This is a ` +

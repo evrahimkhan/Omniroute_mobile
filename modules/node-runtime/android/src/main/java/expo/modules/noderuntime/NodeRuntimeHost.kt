@@ -1,6 +1,8 @@
 package expo.modules.noderuntime
 
+import android.app.ActivityManager
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.CopyOnWriteArrayList
@@ -131,6 +133,27 @@ internal object NodeRuntimeHost {
     exitListeners.remove(listener)
   }
 
+  /**
+   * What the process is allowed and able to use, in one line.
+   *
+   * A runtime killed for memory leaves no message anywhere — no exception, no
+   * stack, nothing in any log — so the numbers it was working under are the only
+   * evidence available afterwards. Written before the runtime starts, into both
+   * logs.
+   */
+  fun memoryFacts(context: Context): String {
+    val runtime = Runtime.getRuntime()
+    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    val info = ActivityManager.MemoryInfo()
+    runCatching { activityManager?.getMemoryInfo(info) }
+    val largeHeap = (context.applicationInfo.flags and ApplicationInfo.FLAG_LARGE_HEAP) != 0
+    val heapMaxMb = runtime.maxMemory() / (1024 * 1024)
+    val heapUsedMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+    return "memory: heap limit ${heapMaxMb} MB, used ${heapUsedMb} MB, " +
+      "device free ${info.availMem / (1024 * 1024)} MB of ${info.totalMem / (1024 * 1024)} MB, " +
+      "lowMemory=${info.lowMemory}, largeHeap=$largeHeap"
+  }
+
   fun gatewayDir(context: Context): File = File(context.filesDir, DIR_NAME)
 
   fun logPath(context: Context): String = File(gatewayDir(context), LOG_FILE_NAME).absolutePath
@@ -235,6 +258,7 @@ internal object NodeRuntimeHost {
           // runtime that starts and produces no output is indistinguishable
           // from one that never ran at all — which is exactly the confusion a
           // silent no-op exit (code 0, empty log) causes on the phone.
+          markRuntime(context, request.logFilePath, "[node-runtime] ${memoryFacts(context)}")
           markRuntime(
             context,
             request.logFilePath,

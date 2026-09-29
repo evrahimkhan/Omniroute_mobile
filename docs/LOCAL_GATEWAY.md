@@ -685,6 +685,45 @@ points at memory or an OEM task killer rather than a JavaScript error (a
 JavaScript error would have printed `[gateway] FAILED:` and did not). The next
 attempt's `node.log` tail should say which.
 
+### 5l. Protecting the boot, and describing the death
+
+Two things changed after the first device install that got all the way through
+and then took the process with it.
+
+**The keep-alive now protects the boot, not just the idle gateway.** The service
+used to be started *after* `NodeRuntimeHost.start()`. The payload's boot — a Next
+standalone tree loading 44,003 files — is the most memory-hungry moment this app
+has, and an Android process that is not foreground is the first one the system
+reclaims. The service is now started **first**, so the whole boot happens under
+foreground protection. If the runtime then fails to start, the failure path
+undoes it: `StartPrefs.clear()` and `GatewayService.abandon()` — a stop that
+leaves the process alone, because killing the app here would turn a recoverable
+start failure into a crash. (`requestStop()` is the wrong tool for this: it ends
+the process deliberately, which is right from the notification and wrong here.)
+
+**The log now says what memory the process had.** A runtime killed for memory
+leaves no message anywhere — no exception, no stack, nothing in any log — so the
+numbers are the only evidence there will ever be:
+
+```
+[node-runtime] memory: heap limit 512 MB, used 41 MB, device free 1093 MB of
+  7602 MB, lowMemory=false, largeHeap=true
+```
+
+`NodeRuntimeHost.memoryFacts()` writes that before `node::Start`, into both logs.
+The module manifest also sets `android:largeHeap="true"`: a Next server booting
+on a phone is exactly the case the flag exists for, and the ceiling it raises is
+the one Android enforces.
+
+`describeRuntimeExit()` now keys off `[node-runtime] starting node` specifically,
+not any `[node-runtime]` line — the memory line is written before the script is
+handed over, so it must not be read as proof that it was.
+
+Guards: `runtime:contract` asserts the ordering (the service's `start()` before
+the runtime's), that `abandon()` exists and is used, that the memory line is
+written, and that the manifest carries `largeHeap`. `gateway:test` covers the
+wording case above.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

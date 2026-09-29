@@ -289,6 +289,21 @@ class GatewayService : Service() {
     }
 
     /**
+     * Stop the keep-alive service, but not the process.
+     *
+     * For the case where the service is already up and the runtime then fails to
+     * start: there is nothing to host, so the notification must go — but the app
+     * itself is fine, and the caller is about to hand an error back to the user.
+     * `requestStop` would be wrong here: it ends the process, which would turn a
+     * recoverable start failure into a crash.
+     */
+    fun abandon(context: Context) {
+      if (!running) return
+      runCatching { context.stopService(Intent(context, GatewayService::class.java)) }
+      running = false
+    }
+
+    /**
      * End the gateway, from either the notification or the app.
      *
      * If the service is not running there is nothing to notify, so the process

@@ -325,6 +325,33 @@ check(
 );
 
 check(
+  'the service is started before the runtime, not after',
+  sources.module.indexOf('GatewayService.start(context)') <
+    sources.module.indexOf('NodeRuntimeHost.start(context, request)'),
+  'the payload boots under foreground protection, which is when the OS is most likely to reclaim the process'
+);
+
+check(
+  'a failed start leaves no notification behind',
+  sources.module.includes('GatewayService.abandon(context)') &&
+    sources.service.includes('fun abandon(context: Context)'),
+  'the service is up before the runtime starts, so the failure path has to undo it — without ending the process'
+);
+
+check(
+  'the runtime log says what memory the process had',
+  sources.host.includes('"[node-runtime] ${memoryFacts(context)}"') &&
+    sources.host.includes('ActivityManager.MemoryInfo()'),
+  'a runtime killed for memory leaves no other evidence at all'
+);
+
+check(
+  'the app can still be allowed a large heap',
+  manifest.includes('largeHeap'),
+  'a Next server booting on a phone is what the flag exists for'
+);
+
+check(
   'the phase is decided by the runtime state, not the log alone',
   sources.installer.includes('deriveGatewayPhase({') &&
     !sources.installer.includes("fromLog.phase === 'starting' ||"),

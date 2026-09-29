@@ -1,6 +1,7 @@
 # Local Gateway — hosting the npm OmniRoute inside the app
 
-Status: **Phase 3 (install flow) — implemented, unverified on hardware.**
+Status: **All four phases implemented; unverified on hardware, and the payload
+still needs its own build job (§5b).**
 Goal: after installing the APK, the user taps *Install local gateway* and the app
 sets up OmniRoute **on the phone** — no separate server, no Termux, nothing bundled
 in the APK except a JavaScript runtime.
@@ -112,18 +113,18 @@ replace — hence the "install after the APK" flow rather than shipping it.
   this with the NDK on every build), but **nothing here has run on a phone yet**:
   whether the runtime actually boots inside an Android app process is the open
   question.
-- **Phase 3 — install flow (this change).** `gateway/bootstrap.mjs` downloads
+- **Phase 3 — install flow (done).** `gateway/bootstrap.mjs` downloads
   the payload, verifies its checksum, unpacks it, and boots it — all inside the
   embedded runtime, so the app needs no download manager or unzipper. The app
   side (`lib/gatewayInstaller.ts`) writes that script into app storage, starts
   the runtime on it, and polls `/healthz` until the gateway actually answers.
   The payload itself is still npm's 2.6 GB tree until the standalone build lands
   — see §5b for what that means and what replaces it.
-- **Phase 4 — UI/UX (not started).** "Local gateway" card in Settings/onboarding:
-  install progress, start/stop, data wipe, and honest messaging about degraded
-  features. `lib/gatewayInstaller.ts` exposes what it needs (`gatewayState()`,
-  `startLocalGateway()`, `waitForLocalGateway()` with a progress callback, and
-  `uninstallLocalGateway()`).
+- **Phase 4 — UI/UX (this change).** "Host it on this phone" card
+  (`components/LocalGatewayCard.tsx`): availability, status, install progress,
+  "Use this gateway", "Remove", and a collapsible view of the runtime log. It
+  appears in Settings under **LOCAL GATEWAY**, and collapsed on the first-run
+  connection screen for anyone who has no gateway to point at yet.
 
 ### 5a. The Phase 2 module contract
 
@@ -288,6 +289,33 @@ files, 0 skipped entries, and a full run — download, checksum, extract, boot �
 was exercised end to end, as was the re-run path that skips a completed install.
 None of that is a substitute for a device; it does mean the logic is not being
 seen for the first time on someone's phone.
+
+### 5d. What the card says, and why
+
+Three places where the honest answer is not the obvious one:
+
+- **"Stop waiting" stops the *wait*, not the install.** The runtime runs on its
+  own thread, so cancelling the wait leaves the download and unpack running in
+  the background; the card says so by going back to showing progress rather than
+  claiming to have stopped anything.
+- **A failed start cannot be retried in-app.** The embedded runtime starts once
+  per process and cannot be restarted after it exits, so the card tells the user
+  to reopen the app instead of offering a Retry button that would fail.
+- **"Remove" deletes the payload, not the user's data.** The database lives under
+  `HOME` (`.omniroute/`), outside the gateway directory, so removal keeps the
+  dashboard data and sign-in. Removing while the runtime is running is refused
+  rather than silently pulling files out from under a live process.
+
+The card also states the things a phone cannot do (image processing, browser
+automation, anything that spawns) rather than letting those surface later as
+mysterious failures.
+
+Progress comes from the runtime log, which is the only channel a native runtime
+has back to the app. That makes `lib/gatewayLog.ts` a contract with
+`gateway/bootstrap.mjs`, and a contract that can break silently: an earlier
+version looked for `already installed` while the script printed `gateway already
+installed`, so that phase simply never fired. `npm run gateway:test` now asserts
+the parser against the real log lines in CI, and reports which line drifted.
 
 ## 6. What will not work on-device
 

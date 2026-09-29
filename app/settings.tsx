@@ -15,6 +15,7 @@ import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import { clearWebViewData } from '../lib/webData';
+import LocalGatewayCard from '../components/LocalGatewayCard';
 
 import { checkGateway, normalizeServerUrl } from '../lib/gateway';
 import { useSettings } from '../lib/useSettings';
@@ -56,6 +57,22 @@ export default function SettingsScreen() {
   const usePublic = async () => {
     setUrl('https://omniroute.online');
     setTestResult(null);
+  };
+
+  /**
+   * Point the app at the gateway that is running on this phone. The URL comes
+   * from the installer only after it has answered `/healthz`, so this saves a
+   * gateway that is known to be up.
+   */
+  const useLocal = async (localUrl: string) => {
+    setUrl(localUrl);
+    setTestResult(null);
+    await save({ serverUrl: localUrl, configured: true });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    Alert.alert(
+      'Using the local gateway',
+      `The dashboard now loads from ${localUrl}, served by this phone.`,
+    );
   };
 
   const changeServer = () => {
@@ -115,6 +132,9 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        <Text style={styles.cardTitle}>LOCAL GATEWAY</Text>
+        <LocalGatewayCard onUse={useLocal} />
+
         <Text style={styles.cardTitle}>GATEWAY</Text>
         <View style={styles.card}>
           <Text style={styles.fieldLabel}>Server URL</Text>

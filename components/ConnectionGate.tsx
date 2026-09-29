@@ -14,6 +14,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
+import LocalGatewayCard from './LocalGatewayCard';
 import { checkGateway, normalizeServerUrl } from '../lib/gateway';
 import { DEFAULT_SERVER_URL, type Settings } from '../lib/useSettings';
 import { theme } from '../lib/theme';
@@ -37,6 +38,8 @@ export default function ConnectionGate({ initial, onSave }: Props) {
   const [url, setUrl] = useState(initial.serverUrl || DEFAULT_SERVER_URL);
   const [test, setTest] = useState<TestState>({ state: 'idle' });
   const [saving, setSaving] = useState(false);
+  // Collapsed by default: the common case is still "point me at a gateway".
+  const [showLocal, setShowLocal] = useState(false);
 
   const runTest = async () => {
     const target = normalizeServerUrl(url);
@@ -140,6 +143,30 @@ export default function ConnectionGate({ initial, onSave }: Props) {
           ) : null}
         </View>
 
+        <Pressable
+          style={({ pressed }) => [styles.localRow, pressed && { opacity: 0.7 }]}
+          onPress={() => setShowLocal((v) => !v)}
+          accessibilityRole="button"
+        >
+          <MaterialCommunityIcons
+            name={showLocal ? 'chevron-down' : 'chevron-right'}
+            size={18}
+            color={theme.textMuted}
+          />
+          <Text style={styles.localLabel}>
+            No gateway yet? Run OmniRoute on this phone
+          </Text>
+        </Pressable>
+
+        {showLocal ? (
+          <LocalGatewayCard
+            onUse={async (localUrl) => {
+              setUrl(localUrl);
+              await onSave({ serverUrl: localUrl, configured: true });
+            }}
+          />
+        ) : null}
+
         <Text style={styles.footer}>
           Sign in to the dashboard once inside the app (Home tab) — your session is shared
           across all features.
@@ -150,6 +177,14 @@ export default function ConnectionGate({ initial, onSave }: Props) {
 }
 
 const styles = StyleSheet.create({
+  localRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 16,
+    paddingVertical: 6,
+  },
+  localLabel: { color: theme.text, fontSize: 14, fontWeight: '600', flex: 1 },
   root: { flex: 1, backgroundColor: theme.bg },
   scroll: {
     flexGrow: 1,

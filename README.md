@@ -115,14 +115,22 @@ How it fits together:
   start the runtime on it, then poll `/healthz` until the gateway answers — so
   the URL saved into settings is one that actually responds.
 
-> Status: phases 1–3 (runtime packaging, the JNI bridge, and the install flow)
-> are implemented; the UI lands next. Everything a machine without a phone can
-> verify *is* verified — CI compiles the native code with the NDK and checks what
-> the APK contains, and the installer was exercised end to end against the real
-> published payload (byte-identical to system `tar`, then a real boot) — but
-> **nothing has yet run inside an Android app process**, and the payload is still
-> npm's 2.6 GB tree rather than the standalone build planned in
-> [docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md) §5b.
+> Status: all four phases are implemented — runtime packaging, the JNI bridge,
+> the install flow, and the UI ("Host it on this phone" in Settings, or on the
+> first-run screen). Everything a machine without a phone can verify *is*
+> verified: CI compiles the native code with the NDK and checks what the APK
+> contains, the installer was exercised end to end against the real published
+> payload (byte-identical to system `tar`, then a real boot), and the installer's
+> log lines are asserted against the app's parser.
+>
+> Two known gaps, both honest ones:
+>
+> 1. **Nothing has run inside an Android app process yet** — that is a hardware
+>    milestone, not a code one.
+> 2. **The payload has no build job yet.** Until it does, "install" would pull
+>    npm's 2.6 GB dependency tree; [docs/LOCAL_GATEWAY.md](docs/LOCAL_GATEWAY.md)
+>    §5b has the replacement (upstream's own standalone build output), which the
+>    installer already accepts.
 
 ## CI pipeline
 

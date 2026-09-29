@@ -22,6 +22,9 @@
 
 import NodeRuntime from '../modules/node-runtime';
 import { BOOTSTRAP_SCRIPT } from './gateway/bootstrapScript.generated';
+import { describeGatewayLog, gatewayLogTail, type GatewayProgress } from './gatewayLog';
+
+export { gatewayLogTail, gatewayProgress, type GatewayProgress } from './gatewayLog';
 
 /** The gateway's default port, and the loopback URL the WebView points at. */
 export const LOCAL_GATEWAY_PORT = 20128;
@@ -130,34 +133,6 @@ export async function readGatewayLog(maxBytes = 64 * 1024): Promise<string> {
   } catch {
     return '';
   }
-}
-
-/**
- * Read the log backwards for the most recent phase marker.
- *
- * The bootstrap prints deterministic lines (`downloading`, `extracting…`,
- * `install complete`, `starting …`, `FAILED:`), so the last one that appears
- * tells us what it is doing. Nothing here is load-bearing for correctness — a
- * wrong guess only changes the wording of the progress UI, never the outcome,
- * because the real state comes from the marker and from /healthz.
- */
-export function describeGatewayLog(log: string): { phase: GatewayPhase | null; error?: string } {
-  const failure = log.lastIndexOf('[gateway] FAILED:');
-  const complete = log.lastIndexOf('[gateway] install complete');
-  const starting = log.lastIndexOf('[gateway] starting ');
-  const downloading = log.lastIndexOf('[gateway] downloading ');
-  const extracting = log.lastIndexOf('[gateway] extracting…');
-  const already = log.lastIndexOf('[gateway] already installed');
-
-  const latest = Math.max(failure, complete, starting, downloading, extracting, already);
-  if (latest === -1) return { phase: null };
-  if (latest === failure) {
-    const message = log.slice(failure).split('\n')[0].replace('[gateway] FAILED:', '').trim();
-    return { phase: 'failed', error: message };
-  }
-  if (latest === starting || latest === already) return { phase: 'starting' };
-  if (latest === complete) return { phase: 'starting' };
-  return { phase: 'installing' };
 }
 
 /** Current state, derived from the native runtime, the marker and the log. */
@@ -301,7 +276,7 @@ export async function waitForLocalGateway(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  const tail = lastState?.logTail.split('\n').slice(-6).join('\n') ?? '';
+  const tail = lastState ? gatewayLogTail(lastState.logTail) : '';
   throw new Error(
     `Timed out waiting for the local gateway after ${Math.round(timeoutMs / 1000)}s.` +
       (tail ? `\nLast output:\n${tail}` : '')
@@ -309,14 +284,20 @@ export async function waitForLocalGateway(
 }
 
 /**
- * Remove the installed gateway (payload, marker and logs). The database lives in
- * the app's own `HOME`, not here, so this does not delete the user's data — that
- * is a separate, more deliberate action.
+ * Remove the installed gateway: the payload, the install marker and the log.
+ *
+ * The database lives in the app's own `HOME` (`<filesDir>/.omniroute`), not in
+ * the gateway directory, so this does **not** delete the user's dashboard data —
+ * that is a separate, more deliberate action. Refuses while the runtime is
+ * running, because deleting the directory out from under it would leave a
+ * process writing to unlinked files.
  */
 export async function uninstallLocalGateway(): Promise<void> {
   if (!NodeRuntime.isAvailable()) return;
+  const status = NodeRuntime.getStatus();
+  if (status.running) {
+    throw new Error('Stop the app (or wait for the runtime to exit) before removing the install.');
+  }
   const paths = NodeRuntime.getPaths();
-  await NodeRuntime.deleteDir(`${paths.gatewayDir}/app`);
-  await NodeRuntime.writeFile(markerPath(), '');
-  await NodeRuntime.clearLog();
+  await NodeRuntime.deleteDir(paths.gatewayDir);
 }

@@ -15,7 +15,8 @@
     "workflows:check": "node scripts/check-workflows.mjs",
     "runtime:fetch": "node scripts/fetch-node-runtime.mjs",
     "runtime:verify": "node scripts/assert-apk-runtime.mjs",
-    "gateway:embed": "node scripts/embed-gateway-bootstrap.mjs"
+    "gateway:embed": "node scripts/embed-gateway-bootstrap.mjs",
+    "gateway:test": "node scripts/check-gateway-log.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

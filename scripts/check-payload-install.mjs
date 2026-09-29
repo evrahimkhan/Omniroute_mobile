@@ -174,7 +174,54 @@ async function main() {
     ['/npm.tar.gz', readFileSync(npmTar)],
     ['/npm.tar.gz.json', readFileSync(npmManifest)],
   ]);
+  // Two payloads served badly on purpose, to exercise the resume path. A phone
+  // that leaves Wi-Fi range does not get a clean error: the connection either
+  // dies mid-body or simply stops delivering bytes, and both used to cost the
+  // whole 776 MB again.
+  const flakyPayload = readFileSync(standaloneTar);
+  const flakyUrl = '/flaky.tar.gz';
+  const stallUrl = '/stall.tar.gz';
+  let flakyHits = 0;
+  let stallHits = 0;
+  // Every Range header seen, so an assertion can talk about the *retry* rather
+  // than whichever request happened to arrive first.
+  const rangesSeen = { flaky: [], stall: [] };
+
   const httpServer = createServer((req, res) => {
+    if (req.url === flakyUrl || req.url === stallUrl) {
+      const isFlaky = req.url === flakyUrl;
+      const payload = flakyPayload;
+      // Keep the header verbatim for the assertions; parse it separately for the
+      // byte offset the server has to serve from.
+      const rawRange = req.headers.range || '';
+      const range = rawRange.replace(/bytes=/, '').replace(/-.*/, '');
+      if (isFlaky) flakyHits++;
+      else stallHits++;
+      rangesSeen[isFlaky ? 'flaky' : 'stall'].push(rawRange);
+      const start = Number(range) || 0;
+
+      const firstHit = isFlaky ? flakyHits === 1 : stallHits === 1;
+      if (firstHit) {
+        res.writeHead(200, { 'content-length': payload.length, 'content-type': 'application/gzip' });
+        res.write(payload.subarray(0, Math.floor(payload.length / 2)));
+        if (isFlaky) {
+          // Half the bytes, then the socket dies.
+          setTimeout(() => res.destroy(), 30);
+        }
+        // Otherwise: keep the socket open and send nothing else — the stall.
+        return;
+      }
+
+      const rest = payload.subarray(start);
+      res.writeHead(start > 0 ? 206 : 200, {
+        'content-length': rest.length,
+        'content-type': 'application/gzip',
+        ...(start > 0 ? { 'content-range': `bytes ${start}-${payload.length - 1}/${payload.length}` } : {}),
+      });
+      res.end(rest);
+      return;
+    }
+
     const body = served.get(req.url);
     if (!body) {
       res.writeHead(404);
@@ -265,6 +312,55 @@ async function main() {
   check('re-run: still resolves the standalone entry', third.output.includes('starting server.js on 127.0.0.1:'));
   check('re-run: boots again', third.output.includes('STANDALONE listening') && third.servedOk === 'ok');
 
+  // --- case 7: the connection dies halfway through --------------------------
+  const flakyDir = join(work, 'install-flaky');
+  const seventh = await run('dropped connection', flakyDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${flakyUrl}`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
+  });
+  check('a dropped connection is reported as a download failure', seventh.output.includes('download failed'));
+
+  const eighth = await run('resumed', flakyDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${flakyUrl}`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
+  });
+  check('the next attempt resumes instead of starting over', eighth.output.includes('resuming the download at'));
+  check(
+    'the retry asked the server for only the missing part',
+    String(rangesSeen.flaky.at(-1)).startsWith('bytes=')
+  );
+  check(
+    'the resumed file is the same file: it verifies and boots',
+    eighth.output.includes('checksum ok') && eighth.output.includes('STANDALONE listening') && eighth.servedOk === 'ok'
+  );
+
+  // --- case 8: the connection stops delivering bytes entirely ---------------
+  const stallDir = join(work, 'install-stall');
+  const ninth = await run('stalled', stallDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${stallUrl}`,
+    GATEWAY_DOWNLOAD_STALL_MS: '1500',
+  });
+  check('a download that stops delivering is called stalled', ninth.output.includes('download stalled after'));
+  check(
+    'and the partial download is kept, because it is the resume point',
+    existsSync(join(stallDir, 'payload.tar.gz.part'))
+  );
+
+  const tenth = await run('resumed after a stall', stallDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}${stallUrl}`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/standalone.tar.gz.json`,
+    GATEWAY_DOWNLOAD_STALL_MS: '1500',
+  });
+  check('a stalled download resumes on the next attempt', tenth.output.includes('resuming the download at'));
+  check(
+    'and finishes: checksum ok, and the payload boots',
+    tenth.output.includes('checksum ok') && tenth.output.includes('STANDALONE listening') && tenth.servedOk === 'ok'
+  );
+  check(
+    'the retry after a stall only asked for the missing bytes',
+    String(rangesSeen.stall.at(-1)).startsWith('bytes=')
+  );
+
   // --- case 6: the log the app actually reads -------------------------------
   //
   // The card reads `gateway.log`, written by the bootstrap itself, because the
@@ -293,7 +389,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 20;
+  const total = 29;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

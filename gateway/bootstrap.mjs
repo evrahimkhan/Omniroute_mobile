@@ -33,6 +33,7 @@ import {
   existsSync,
   mkdirSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { statfsSync } from 'node:fs';
@@ -56,6 +57,29 @@ const PROGRESS_BYTES = 8 * 1024 * 1024;
  * below, and this is the floor for when a server sends no Content-Length.
  */
 const MIN_FREE_BYTES = 1536 * 1024 * 1024;
+
+/**
+ * How long a download may go without a single byte before it is called stalled.
+ *
+ * Wi-Fi that drops does not reset the connection on Android, it just stops
+ * delivering: without this, an install can sit on a dead socket indefinitely,
+ * showing the progress of a download that is not happening. Overridable so a
+ * test does not have to wait two minutes to exercise it.
+ */
+const STALL_MS = Number(process.env.GATEWAY_DOWNLOAD_STALL_MS || '') || 120_000;
+
+function mb(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Size of a file, or 0 when it is not there (or cannot be read). */
+function fileSize(file) {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Free bytes on the filesystem holding `dir`, or null when the platform will not
@@ -376,13 +400,64 @@ async function fetchExpectedSha256(url) {
 }
 
 async function download(url, destPath) {
+  const already = fileSize(destPath);
+  const resuming = already > 0;
   log(`downloading ${url}`);
-  const response = await fetch(url, { redirect: 'follow' });
-  if (!response.ok) throw new Error(`download failed: HTTP ${response.status} ${response.statusText}`);
-  if (!response.body) throw new Error('download failed: empty response body');
+  if (resuming) log(`resuming the download at ${mb(already)}`);
 
-  const total = Number(response.headers.get('content-length') || 0);
-  if (total) log(`payload is ${(total / (1024 * 1024)).toFixed(1)} MB`);
+  const controller = new AbortController();
+  let stalled = false;
+  let timer = null;
+  const armStall = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, STALL_MS);
+  };
+
+  armStall();
+  let response;
+  try {
+    response = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: resuming ? { range: `bytes=${already}-` } : undefined,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    throw new Error(stalled ? stallMessage(already) : `download failed: ${err.message}`);
+  }
+
+  if (!response.ok) {
+    clearTimeout(timer);
+    throw new Error(`download failed: HTTP ${response.status} ${response.statusText}`);
+  }
+  if (!response.body) {
+    clearTimeout(timer);
+    throw new Error('download failed: empty response body');
+  }
+
+  // Where the bytes in this response start. A 206 means the server agreed to
+  // continue; anything else means it sent the whole file, so what is on disk is
+  // scrap and the sink has to truncate rather than append.
+  const contentRange = response.headers.get('content-range') || '';
+  const rangeTotal = Number(contentRange.split('/')[1] || 0);
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  let start = 0;
+  if (resuming && response.status === 206) {
+    const from = Number((contentRange.split(' ')[1] || '').split('-')[0]);
+    if (Number.isFinite(from) && from === already) {
+      start = already;
+    } else {
+      log('the server resumed at a different offset; starting over');
+    }
+  } else if (resuming) {
+    log('the server sent the whole file instead of a range; starting over');
+  }
+
+  const total = rangeTotal || start + contentLength;
+  if (total) log(`payload is ${mb(total)}`);
 
   // Refuse before writing a byte if the phone cannot hold both the archive and
   // what comes out of it. Failing here is clear ("needs 2.3 GB, has 800 MB");
@@ -391,7 +466,7 @@ async function download(url, destPath) {
   const needed = total ? Math.round(total * 3) : MIN_FREE_BYTES;
   const free = freeBytes(path.dirname(destPath));
   if (free !== null) {
-    log(`free space ${(free / (1024 * 1024)).toFixed(1)} MB, need about ${(needed / (1024 * 1024)).toFixed(0)} MB`);
+    log(`free space ${mb(free)}, need about ${(needed / (1024 * 1024)).toFixed(0)} MB`);
     if (free < needed) {
       throw new Error(
         `not enough free space for the ${(total / (1024 * 1024)).toFixed(0)} MB payload: ` +
@@ -401,29 +476,55 @@ async function download(url, destPath) {
     }
   }
 
-  let received = 0;
-  let lastProgress = 0;
+  let received = start;
+  let lastProgress = Math.floor(start / PROGRESS_BYTES);
   const body = Readable.fromWeb(response.body);
   body.on('data', (chunk) => {
     received += chunk.length;
+    armStall();
     const step = Math.floor(received / PROGRESS_BYTES);
     if (step > lastProgress) {
       lastProgress = step;
       const percent = total ? ` (${((received / total) * 100).toFixed(0)}%)` : '';
-      log(`downloaded ${(received / (1024 * 1024)).toFixed(1)} MB${percent}`);
+      log(`downloaded ${mb(received)}${percent}`);
     }
   });
 
-  await pipeline(body, createWriteStream(destPath));
-  log(`downloaded ${(received / (1024 * 1024)).toFixed(1)} MB`);
+  try {
+    // Append when continuing an earlier attempt, truncate otherwise.
+    await pipeline(body, createWriteStream(destPath, start > 0 ? { flags: 'a' } : undefined));
+  } catch (err) {
+    if (stalled) throw new Error(stallMessage(received));
+    throw new Error(`download failed: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // A short body that ends without an error (a proxy cutting the stream) would
+  // otherwise reach the extractor, which fails somewhere far less clear.
+  if (total && received !== total) {
+    throw new Error(
+      `download ended early: got ${mb(received)} of ${mb(total)} — start it again to resume`
+    );
+  }
+
+  log(`downloaded ${mb(received)}`);
   return received;
 }
 
 /**
- * Choose the entry script. `preferred` wins when given and present; otherwise
- * the first candidate that exists; otherwise the first candidate, so the error
- * message names something real.
+ * Said when bytes simply stop arriving.
+ *
+ * It has to say "try again", because that is now genuinely cheap: the partial
+ * file is kept and the next attempt continues from it.
  */
+function stallMessage(received) {
+  return (
+    `download stalled after ${mb(received)} — nothing arrived for ${Math.round(STALL_MS / 1000)}s. ` +
+    `Start it again: the download resumes from where it stopped.`
+  );
+}
+
 function pickEntry(preferred, candidates) {
   const order = preferred ? [preferred, ...candidates.filter((c) => c !== preferred)] : candidates;
   for (const candidate of order) {
@@ -525,11 +626,10 @@ async function main() {
     }
 
     try {
-      await fs.rm(partPath, { force: true });
-
       // A previous run may have downloaded the payload and failed later (an
-      // interrupted extract, a killed app). Re-downloading 100+ MB to get to the
-      // same bytes is a poor use of someone's mobile data.
+      // interrupted extract, a killed app). Re-downloading 700+ MB to get to the
+      // same bytes is a poor use of someone's mobile data — and a download that
+      // died halfway is resumed, not restarted, from the .part file below.
       let haveTarball = false;
       if (existsSync(tarballPath)) {
         if (expectedSha) {
@@ -548,7 +648,12 @@ async function main() {
           log('verifying checksum…');
           const actualSha = await sha256File(partPath);
           if (actualSha !== expectedSha) {
-            throw new Error(`checksum mismatch: expected ${expectedSha}, got ${actualSha}`);
+            // Marked so the cleanup below deletes it: a payload that failed
+            // verification is known bad, and resuming from it would download
+            // the rest of a file that can never verify.
+            const mismatch = new Error(`checksum mismatch: expected ${expectedSha}, got ${actualSha}`);
+            mismatch.badPayload = true;
+            throw mismatch;
           }
           log('checksum ok');
         } else {
@@ -601,7 +706,10 @@ async function main() {
       await fs.rm(tarballPath, { force: true });
       log('install complete');
     } catch (err) {
-      await fs.rm(partPath, { force: true }).catch(() => {});
+      // Keep a partial download: it is the resume point for the next attempt.
+      // Only a payload that failed *verification* is deleted — it is known bad,
+      // and resuming from it could never succeed.
+      if (err && err.badPayload) await fs.rm(partPath, { force: true }).catch(() => {});
       fatal(err);
     }
   }

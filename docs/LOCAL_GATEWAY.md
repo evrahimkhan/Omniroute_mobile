@@ -562,6 +562,40 @@ Also, the APK's version *name* now carries the build number
 (`1.0.0-b43`), so a screenshot or Settings → Apps answers "which build is
 this?" without a round trip. The release tag is unchanged.
 
+### 5i. A 776 MB download on a phone that is on Wi-Fi
+
+The payload is the largest thing this app ever moves, and the phone is not a
+server: Wi-Fi drops, the screen sleeps, Android moves the phone between networks.
+Three things had to be true before "just try again" was reasonable advice.
+
+  - **The download resumes.** `download()` looks at the `.part` file, sends
+    `Range: bytes=<size>-`, and appends when the server answers `206`. GitHub's
+    release assets do. A server that ignores the range, or resumes at an offset
+    that does not match what is on disk, is detected (`206`/`Content-Range`
+    checked against the file size) and the download restarts cleanly rather than
+    producing a subtly corrupt archive. The checksum still covers the reassembled
+    file, so a bad resume fails verification instead of installing.
+  - **The partial file survives a failure.** It used to be deleted at the start
+    of every attempt *and* again on any failure, which made the resume point
+    impossible to keep. Now it is deleted only when the payload fails
+    *verification* — that file is known bad, and resuming it would loop forever.
+    `mismatch.badPayload = true` is what carries that distinction to the cleanup.
+  - **A dead connection is noticed.** Android does not reset a dropped Wi-Fi
+    connection, it simply stops delivering bytes, so an install could sit on a
+    dead socket showing progress for a download that was not happening. 120 s
+    without a byte is a stall (`GATEWAY_DOWNLOAD_STALL_MS` overrides it), and the
+    message says what to do: *"download stalled after 412.3 MB — nothing arrived
+    for 120s. Start it again: the download resumes from where it stopped."*
+    A body that ends early without an error is caught too, and says the same.
+
+Guards: `payload:install-test` serves the payload badly on purpose — one URL
+drops the socket halfway, another sends headers and then goes quiet. It asserts
+that the failure is reported, that the retry asks with a `Range` header, that the
+partial file is kept, and that the resumed download verifies and boots (29
+assertions; 6 of them fail against the previous `download()`). The log's resume
+line is part of the log contract (`gateway:test`), so the card can show
+"Resuming the download…" rather than appearing to start over.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

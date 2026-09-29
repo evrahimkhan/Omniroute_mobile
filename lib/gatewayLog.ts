@@ -78,6 +78,10 @@ export function gatewayProgress(log: string): GatewayProgress | null {
     if (found) {
       return { kind: 'downloading', label: 'Downloading…', detail: `payload is ${found[1]}` };
     }
+    found = match(/^resuming the download at ([\d.]+ MB)$/);
+    if (found) {
+      return { kind: 'downloading', label: 'Resuming the download…', detail: found[1] };
+    }
     if (match(/^reusing the previously downloaded payload/)) {
       return { kind: 'reusing', label: 'Reusing the download from last time…' };
     }

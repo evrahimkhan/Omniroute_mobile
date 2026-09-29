@@ -46,6 +46,7 @@ const CASES = [
   ['[gateway] payload is 115.7 MB', 'downloading', 'payload is 115.7 MB', 'payload is '],
   ['[gateway] downloaded 48.1 MB (42%)', 'downloading', '48.1 MB (42%)', 'downloaded '],
   ['[gateway] downloaded 115.7 MB', 'downloading', '115.7 MB', 'downloaded '],
+  ['[gateway] resuming the download at 512.0 MB', 'downloading', '512.0 MB', 'resuming the download at'],
   [
     '[gateway] reusing the previously downloaded payload',
     'reusing',
@@ -235,7 +236,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 17} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${CASES.length * 2 + 19} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

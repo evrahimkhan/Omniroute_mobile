@@ -206,12 +206,22 @@ internal object NodeRuntimeHost {
       val worker = Thread(
         group,
         Runnable {
+          // The app's copy of "the runtime was handed a script". Without it, a
+          // runtime that starts and produces no output is indistinguishable
+          // from one that never ran at all — which is exactly the confusion a
+          // silent no-op exit (code 0, empty log) causes on the phone.
+          appendToLog(
+            request.logFilePath,
+            "[node-runtime] starting node ${runtimeVersion()}: ${request.scriptPath}" +
+              (if (request.args.isEmpty()) "" else " ${request.args.joinToString(" ")}")
+          )
           val code = try {
             NodeRuntimeNative.nativeStart(argv, envPairs, request.workingDirectory, request.logFilePath)
           } catch (t: Throwable) {
             appendToLog(request.logFilePath, "[node-runtime] fatal: ${t.message}")
             FAILED_TO_START
           }
+          appendToLog(request.logFilePath, "[node-runtime] node exited with code $code")
           exitCode = code
           for (listener in exitListeners) {
             runCatching { listener(code) }

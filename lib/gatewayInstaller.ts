@@ -24,7 +24,12 @@ import { PermissionsAndroid, Platform } from 'react-native';
 
 import NodeRuntime from '../modules/node-runtime';
 import { BOOTSTRAP_SCRIPT } from './gateway/bootstrapScript.generated';
-import { describeGatewayLog, gatewayLogTail, type GatewayProgress } from './gatewayLog';
+import {
+  describeGatewayLog,
+  describeRuntimeExit,
+  gatewayLogTail,
+  type GatewayProgress,
+} from './gatewayLog';
 
 export { gatewayLogTail, gatewayProgress, type GatewayProgress } from './gatewayLog';
 
@@ -44,6 +49,19 @@ export const LOCAL_GATEWAY_URL = `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
  */
 const PAYLOAD_TAG = 'gateway-payload';
 const RELEASE_BASE = `https://github.com/evrahimkhan/Omniroute_mobile/releases/download/${PAYLOAD_TAG}`;
+
+/**
+ * Tells the bootstrap it is being run as a program, not imported.
+ *
+ * It is passed as an argv flag rather than inferred from the script's path
+ * because the path cannot be relied on: Node resolves symlinks for
+ * `import.meta.url` but not for `argv[1]`, and Android symlinks its app-data
+ * directories. Without the flag, a mismatch makes the bootstrap load, do
+ * nothing and exit 0 — which is indistinguishable from a crash on the phone.
+ * Mirrors `RUN_FLAG` in `gateway/bootstrap.mjs`; the contract check keeps the
+ * two spellings in step.
+ */
+export const GATEWAY_RUN_FLAG = '--gateway-run';
 
 export const DEFAULT_PAYLOAD_URL =
   process.env.EXPO_PUBLIC_GATEWAY_PAYLOAD_URL ?? `${RELEASE_BASE}/omniroute-payload.tar.gz`;
@@ -204,9 +222,7 @@ export async function gatewayState(): Promise<GatewayState> {
       installedAt: marker?.installedAt ?? null,
       keepAlive: false,
       logTail: log,
-      error:
-        fromLog.error ??
-        `The embedded runtime exited (code ${status.exitCode ?? 'unknown'}).`,
+      error: fromLog.error ?? describeRuntimeExit(status.exitCode, log),
       url,
     };
   }
@@ -294,6 +310,7 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
 
   await NodeRuntime.start({
     scriptPath,
+    args: [GATEWAY_RUN_FLAG],
     workingDirectory: paths.gatewayDir,
     logFilePath: paths.logFilePath,
     env,

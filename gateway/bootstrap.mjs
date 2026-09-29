@@ -26,13 +26,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MARKER = 'install.json';
 const PAYLOAD_NAME = 'payload.tar.gz';
@@ -371,6 +371,11 @@ async function readMarker(dir) {
 }
 
 async function main() {
+  // Printed before anything else can fail, so an empty log means the script
+  // never got this far — a different problem from a gateway that failed to
+  // install, and one the app can only guess at otherwise.
+  log(`starting on node ${process.version} (pid ${process.pid})`);
+
   const gatewayDir = process.env.GATEWAY_DIR;
   if (!gatewayDir) fatal(new Error('GATEWAY_DIR is required'));
 
@@ -521,11 +526,34 @@ async function main() {
   }
 }
 
-// Only install+boot when executed as a program: importing this module (from a
-// test, say) must not start downloading things.
-const isDirectRun =
-  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+/**
+ * The argv flag the app passes to say "run the installer".
+ *
+ * Path identity is not a reliable signal on Android: Node resolves symlinks
+ * when it computes `import.meta.url`, while `argv[1]` keeps whatever the caller
+ * typed — and Android's app-data paths are symlinks of each other
+ * (`/data/data` ⇄ `/data/user/0`). Comparing the two strings therefore came out
+ * false on a real phone, where the script loaded, `main()` was never called and
+ * the process exited 0 with an empty log: the app could only report a crash
+ * that had not happened, and 17 minutes of build time bought nothing.
+ * The flag takes the filesystem out of the question.
+ */
+export const RUN_FLAG = '--gateway-run';
 
-if (isDirectRun) main().catch(fatal);
+/** Is this module the program being run, rather than an import? */
+function invokedAsProgram() {
+  if (process.argv.includes(RUN_FLAG)) return true;
+  if (!process.argv[1]) return false;
+  // realpath() on both sides — see RUN_FLAG above.
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+// Only install+boot when run as a program: importing this module (from a test,
+// say) must not start downloading things.
+if (invokedAsProgram()) main().catch(fatal);
 
 export { extractTarGz, sha256File, parsePax };

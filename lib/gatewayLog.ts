@@ -104,6 +104,24 @@ export function gatewayProgress(log: string): GatewayProgress | null {
   return null;
 }
 
+/**
+ * A failure's first line, plus where to look when the cause is outside the app.
+ *
+ * The payload is a release asset built by a separate workflow, so "HTTP 404"
+ * here means the release has none — nothing about the phone is wrong, and no
+ * amount of retrying will help. Everything else is reported as the runtime
+ * wrote it.
+ */
+function explainFailure(detail: string): string {
+  if (/HTTP 40[34]/.test(detail)) {
+    return (
+      `${detail} — no payload file is published for this build's payload URL. ` +
+      `Run the "Build OmniRoute web gateway" workflow (payload on), then try again.`
+    );
+  }
+  return detail;
+}
+
 /** Last few meaningful log lines, for when something goes wrong. */
 export function gatewayLogTail(log: string, lines = 8): string {
   return log
@@ -112,6 +130,35 @@ export function gatewayLogTail(log: string, lines = 8): string {
     .filter(Boolean)
     .slice(-lines)
     .join('\n');
+}
+
+/**
+ * Did the gateway script print anything at all?
+ *
+ * The bootstrap's first act is to log a startup banner, so a runtime that has
+ * exited with an empty log never reached the script — as opposed to the script
+ * running and failing, which always prints `[gateway] FAILED:`.
+ */
+export function gatewayNeverRan(log: string): boolean {
+  return !log.split('\n').some((line) => line.includes('[gateway]'));
+}
+
+/**
+ * Wording for "the runtime exited", because the two cases mean different things
+ * to whoever is looking at the phone.
+ *
+ * An exit with an empty log is the confusing one: the code is 0, so it reads as
+ * a clean shutdown, when in fact nothing ran. Saying so plainly is the
+ * difference between "try again" and a bug report with nothing in it.
+ */
+export function describeRuntimeExit(exitCode: number | null, log: string): string {
+  const code = `code ${exitCode ?? 'unknown'}`;
+  if (!gatewayNeverRan(log)) return `The embedded runtime exited (${code}).`;
+  return (
+    `The embedded runtime exited (${code}) without the gateway script printing anything, ` +
+    `so the gateway never ran. Reopen the app and try again — see the gateway log for what the ` +
+    `runtime reported.`
+  );
 }
 
 /** The phases a caller can be in; mirrors GatewayPhase in gatewayInstaller. */
@@ -134,7 +181,7 @@ export function describeGatewayLog(log: string): { phase: GatewayPhaseName | nul
   const progress = gatewayProgress(log);
   if (!progress) return { phase: null };
   if (progress.kind === 'failed') {
-    return { phase: 'failed', error: progress.detail };
+    return { phase: 'failed', error: explainFailure(progress.detail ?? '') };
   }
   if (progress.kind === 'installed' || progress.kind === 'starting') {
     return { phase: 'starting' };

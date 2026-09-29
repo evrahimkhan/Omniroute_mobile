@@ -260,14 +260,23 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # The annotation is the only part of this log that is readable from
           # every environment, so it has to carry the cause, not just the headers.
-          # Gradle prints the reason on the lines *after* 'What went wrong:', and
-          # nothing else in the file says it.
-          excerpt=$(awk '/What went wrong/{flag=1} flag{print} flag&&/^\* Try:/{exit}' "$log" \
-            | head -n 14 | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
+          #
+          # A compiler error names the file, the line and what is wrong with it,
+          # and 'What went wrong:' below it only names the *task* — so take the
+          # compiler's lines first. Paths are stripped of the runner prefix: the
+          # part after it is what identifies the file here.
+          excerpt=$(grep -E '^e: |^error: |CMake Error' "$log" | head -n 12)
           if [ -z "$excerpt" ]; then
-            excerpt=$(grep -E 'error:|CMake Error|FAILURE:|Execution failed for task|Could not|Caused by' "$log" \
-              | tail -n 10 | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
+            excerpt=$(awk '/What went wrong/{flag=1} flag{print} flag&&/^\* Try:/{exit}' "$log" \
+              | head -n 14)
           fi
+          if [ -z "$excerpt" ]; then
+            excerpt=$(grep -E 'error:|FAILURE:|Execution failed for task|Could not|Caused by' "$log" \
+              | tail -n 10)
+          fi
+          excerpt=$(printf '%s' "$excerpt" \
+            | sed 's#/home/runner/work/[^/]*/[^/]*/##g' \
+            | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-3500)
           echo "::error title=Gradle failed::${excerpt}"
 
       # A build that silently drops libnode.so still "succeeds" — fail here instead

@@ -25,6 +25,12 @@ export interface NodeRuntimeStatus {
   /** The app's process id — node runs in-process, so this is shared. */
   pid: number;
   /**
+   * How the previous run of the app ended, when it ended abnormally — the only
+   * account of a process that was killed for memory, which writes nothing to any
+   * log. Null on API < 30 and after an ordinary exit.
+   */
+  previousExit: string | null;
+  /**
    * A foreground service is holding the process so the gateway keeps serving
    * with the app closed.
    */

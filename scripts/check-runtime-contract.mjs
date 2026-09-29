@@ -339,6 +339,23 @@ check(
 );
 
 check(
+  'the app asks Android why the previous run ended',
+  sources.host.includes('manager.historicalProcessExitInfos') &&
+    /\.reason != ApplicationExitInfo\.REASON_USER_REQUESTED/.test(sources.host) &&
+    sources.host.includes('"previousExit" to context?.let { previousExit(it) }') &&
+    sources.types.includes('previousExit: string | null;') &&
+    sources.installer.includes('previousExit: status.previousExit ?? null'),
+  'a process killed for memory writes nothing anywhere; this is the only account of it that exists'
+);
+
+check(
+  'that diagnostic survives the API guard',
+  sources.host.includes('Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R') &&
+    sources.host.includes('runCatching { previousExitFrom(context) }'),
+  'ApplicationExitInfo is API 30+, and a diagnostic must never be the reason a start fails'
+);
+
+check(
   'the runtime log says what memory the process had',
   sources.host.includes('"[node-runtime] ${memoryFacts(context)}"') &&
     sources.host.includes('ActivityManager.MemoryInfo()'),

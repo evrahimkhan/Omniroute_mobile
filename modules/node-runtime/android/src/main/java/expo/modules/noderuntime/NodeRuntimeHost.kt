@@ -1,9 +1,13 @@
 package expo.modules.noderuntime
 
 import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.io.RandomAccessFile
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -154,6 +158,53 @@ internal object NodeRuntimeHost {
       "lowMemory=${info.lowMemory}, largeHeap=$largeHeap"
   }
 
+  /**
+   * Why the *previous* run of this app ended, as Android recorded it — or null
+   * when the last end was ordinary.
+   *
+   * This is the answer to "the app just disappeared". A process killed for
+   * memory, killed by a native crash, or killed for excessive resource use writes
+   * nothing to any log and shows no error: it is simply gone, and everything the
+   * app knows afterwards is that its runtime never exited. Android keeps the
+   * reason for exactly this purpose (`ApplicationExitInfo`, API 30+), and it is
+   * the difference between guessing at memory pressure and being told.
+   *
+   * Only abnormal endings are reported: "the user swiped it away" is not news,
+   * and reporting it would bury the line that matters.
+   */
+  fun previousExit(context: Context): String? {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return null
+    return runCatching { previousExitFrom(context) }.getOrNull()
+  }
+
+  private fun previousExitFrom(context: Context): String? {
+    val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return null
+    val infos = manager.historicalProcessExitInfos ?: return null
+    val info = infos.firstOrNull {
+      it.reason != ApplicationExitInfo.REASON_USER_REQUESTED && it.reason != ApplicationExitInfo.REASON_OTHER
+    } ?: return null
+
+    val whenText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(info.timestamp))
+    val why = when (info.reason) {
+      ApplicationExitInfo.REASON_LOW_MEMORY -> "the system killed it for memory"
+      ApplicationExitInfo.REASON_CRASH_NATIVE -> "it died in native code (signal ${info.status})"
+      ApplicationExitInfo.REASON_CRASH -> "it crashed (Java)"
+      ApplicationExitInfo.REASON_ANR -> "it stopped responding and was killed"
+      ApplicationExitInfo.REASON_SIGNALED -> "it was killed by signal ${info.status}"
+      ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "the system killed it for using too many resources"
+      ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "it failed to start"
+      ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "it was killed after a permission change"
+      else -> "the system ended it (reason ${info.reason})"
+    }
+    val where = if (info.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+      "while it was in the foreground"
+    } else {
+      "while it was in the background"
+    }
+    val description = info.description?.takeIf { it.isNotBlank() }?.let { " — ${it.trim()}" } ?: ""
+    return "the previous run ended $whenText: $why ($where)$description"
+  }
+
   fun gatewayDir(context: Context): File = File(context.filesDir, DIR_NAME)
 
   fun logPath(context: Context): String = File(gatewayDir(context), LOG_FILE_NAME).absolutePath
@@ -171,7 +222,8 @@ internal object NodeRuntimeHost {
     "startedAt" to startedAt,
     "logFilePath" to context?.let { logPath(it) },
     "keepAlive" to GatewayService.isRunning(),
-    "pid" to android.os.Process.myPid()
+    "pid" to android.os.Process.myPid(),
+    "previousExit" to context?.let { previousExit(it) }
   )
 
   fun readLog(context: Context, maxBytes: Int): String {

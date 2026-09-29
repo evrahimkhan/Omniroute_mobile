@@ -134,6 +134,15 @@ export interface GatewayState {
    * user to reopen the app would be wrong advice.
    */
   runtimeExited: boolean;
+  /**
+   * How the *previous* run of the app ended, when it ended abnormally.
+   *
+   * The only account of a process the system killed: such a process writes
+   * nothing to any log before it is gone. Android keeps the reason, so the card
+   * can say "the system killed it for memory" instead of leaving everyone to
+   * guess.
+   */
+  previousExit: string | null;
   /** The URL to point the WebView at once the phase is `ready`. */
   url: string;
 }
@@ -273,6 +282,7 @@ export async function gatewayState(): Promise<GatewayState> {
       installedAt: null,
       keepAlive: false,
       runtimeExited: false,
+      previousExit: null,
       logTail: '',
       runtimeTail: '',
       error: localGatewayUnavailableReason() ?? undefined,
@@ -294,6 +304,7 @@ export async function gatewayState(): Promise<GatewayState> {
       installedAt: marker?.installedAt ?? null,
       keepAlive: false,
       runtimeExited: Boolean(status.exited),
+      previousExit: status.previousExit ?? null,
       logTail: log,
       runtimeTail,
       error: fromLog.error ?? describeRuntimeExit(status.exitCode, log),
@@ -314,6 +325,7 @@ export async function gatewayState(): Promise<GatewayState> {
     installedAt: marker?.installedAt ?? null,
     keepAlive,
     runtimeExited: Boolean(status.exited),
+    previousExit: status.previousExit ?? null,
     logTail: log,
     runtimeTail,
     url,

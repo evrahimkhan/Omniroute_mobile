@@ -724,6 +724,35 @@ the runtime's), that `abandon()` exists and is used, that the memory line is
 written, and that the manifest carries `largeHeap`. `gateway:test` covers the
 wording case above.
 
+### 5m. Asking Android why the app disappeared
+
+The device install that got all the way through ended with the app simply gone:
+no `[gateway] FAILED:`, no exception, no trace in either log. A process killed
+for memory leaves exactly that signature, and no amount of reading my own logs
+was going to say more, because a killed process writes nothing before it dies.
+
+Android keeps the reason. `ApplicationExitInfo` (API 30+) records, per app, how
+each past process ended and why: `REASON_LOW_MEMORY`, `REASON_CRASH_NATIVE`
+(with the signal), `REASON_CRASH`, `REASON_ANR`, `REASON_SIGNALED`,
+`REASON_EXCESSIVE_RESOURCE_USAGE`, and so on, plus the time and whether the
+process was foreground at the time. `NodeRuntimeHost.previousExit()` reads it and
+the card shows it under **"How the last run ended"** — above the logs, because it
+answers the question everyone actually has.
+
+Two decisions in it worth naming:
+
+  - **Only abnormal endings are reported.** `REASON_USER_REQUESTED` and
+    `REASON_OTHER` are filtered out: "the user swiped it away" is not news, and
+    reporting it would bury the line that matters.
+  - **It can never be the reason a start fails.** The whole thing is behind an
+    API-30 guard and a `runCatching`: a diagnostic that throws is worse than no
+    diagnostic, and this one runs during app startup.
+
+It is carried as `NodeRuntimeStatus.previousExit` → `GatewayState.previousExit`,
+and `runtime:contract` asserts the whole chain (the Android read, the filter,
+the status-map entry, the TS type, the app's pass-through), plus the API guard.
+Removing the status-map entry fails two checks.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

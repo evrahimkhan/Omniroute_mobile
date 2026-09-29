@@ -25,6 +25,7 @@ const STATUS: NodeRuntimeStatus = {
   logFilePath: null,
   pid: -1,
   keepAlive: false,
+  previousExit: null,
 };
 
 const stub = {

@@ -157,6 +157,20 @@ Decisions worth keeping:
 - The CMake step **degrades instead of failing**: if no runtime is present for
   the ABI being built (an emulator JS-only dev client, say) it compiles stubs
   that report `available: false`.
+- **C++20.** Node 24's headers use `concept`/`requires` and
+  `std::contiguous_iterator_tag`; built as C++17 the compile dies inside
+  `cppgc/macros.h` and `v8-memory-span.h` before it reaches our code. (This is
+  easy to miss locally: a distro Node 22 only ships the lean public headers,
+  while the published archive ships Node 24's full include tree.)
+- **The module must use the app's NDK.** A library that compiles C++ falls back
+  to AGP's *default* NDK version if it does not set one, and that is usually not
+  the NDK the SDK actually has. `expo-modules-core` sets `ndkVersion`/`ndkPath`
+  from the root project, guarded with `hasProperty`; this module copies that.
+
+What CI proves on every APK build: the archive downloads, the runtime exports
+`node::Start`, CMake compiles the shim against the real headers for both device
+ABIs, and the resulting APK contains `lib/<abi>/libnode.so` **and**
+`lib/<abi>/libnoderuntime_jni.so`. What it cannot prove is that any of it runs.
 
 ### 5b. Phase 3 blocker: the tarball has no dependencies
 

@@ -596,6 +596,48 @@ assertions; 6 of them fail against the previous `download()`). The log's resume
 line is part of the log contract (`gateway:test`), so the card can show
 "Resuming the download…" rather than appearing to start over.
 
+### 5j. When GitHub will not serve the file
+
+A phone reported this, in the app's own log:
+
+```
+[gateway] starting on node v24.20.0 (pid 28192)
+[gateway] fetching the expected checksum…
+[gateway] FAILED: Error: could not fetch the expected checksum from
+  https://github.com/evrahimkhan/Omniroute_mobile/releases/download/
+  gateway-payload/omniroute-payload.tar.gz.json: checksum URL returned HTTP 404
+```
+
+The asset exists — `curl` from the open internet gets the same `302` for that
+URL that it gets for the payload itself, and a `404` only for a name that is
+genuinely absent. Something on that phone's network answered 404 for one GitHub
+URL. Whatever it was, the app's response to it was the bug:
+
+  - **An unreachable checksum is no longer fatal.** The manifest is served from
+    the same host as the payload, so it catches corruption in transit, not a
+    hostile publisher — and gzip's own CRC already catches most corruption.
+    Refusing to install because a *checksum* URL is unreachable (a filter, a
+    portal, a flaky proxy, a 404) turns defence-in-depth into an outage. The
+    install proceeds on the same warning path that already existed for "no
+    checksum configured", with the reason included:
+    `warning: no checksum available (the manifest at <url> could not be
+    fetched: <reason>) — installing without integrity verification`.
+    A manifest that *was* fetched and does not match stays fatal: that is
+    corruption, not a network problem.
+  - **Transient download failures are retried**, three attempts 2 s and 4 s
+    apart, resuming between them — so a retry costs the missing bytes, not the
+    whole 776 MB. A 4xx is not retried (the server has answered), except 408 and
+    429, which are explicitly about trying again.
+  - **403/404 on the payload names the URL** and says what to try. "GitHub would
+    not serve this file to this network" is different advice from a timeout, and
+    a bare "HTTP 404" sends people looking in the wrong place —
+    `explainFailure()` in `lib/gatewayLog.ts` now lists both causes.
+
+Guards: `payload:install-test` reproduces the phone's case (a manifest URL that
+404s must not stop the install), a 500 that is retried and then succeeds, a
+dropped socket that recovers within one attempt, and an endpoint that always
+drops to prove the partial file survives for the next run — 34 assertions.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

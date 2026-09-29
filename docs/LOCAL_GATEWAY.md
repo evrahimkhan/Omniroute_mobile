@@ -762,6 +762,80 @@ filter,
 the status-map entry, the TS type, the app's pass-through), plus the API guard.
 Removing the status-map entry fails two checks.
 
+### 5n. The boot record, and the heap limit that stops the kill
+
+The installation that got furthest on the phone ended the same silent way: the
+payload unpacked, `starting server.js on 127.0.0.1:20128` appeared in the log,
+and the app was gone. Neither log said another word, and there was nothing to
+read afterwards — which is the signature of a process that was killed rather
+than one that failed. A killed process writes nothing on the way out.
+
+Two changes follow from that, one for each half of the problem.
+
+**A record written ahead of the step (`boot.log`).** `gateway.log` is already
+written synchronously, so it always reaches the line *before* the crash; the
+problem is the line after it. So the bootstrap now keeps a separate record and
+writes each step *before* taking it:
+
+```
+01 runtime ready on node v24.20.0 (pid 8123)
+02 installing the payload
+03 the payload is installed
+04 loading dist/server.js
+```
+
+Every line is `open` → `write` → `fsync` → `close`, because an unflushed write
+is a write that a SIGKILL takes with it. The last line is therefore a fact about
+where the process was, not an inference from what it managed to say. The steps
+cover the boot (`loading <entry>`, `<entry> loaded; waiting for the server to
+answer`, `the server is answering`) and every way the process can end that node
+lets us observe: `the process is exiting (code N)` (which is how a payload's own
+`process.exit()` is told apart from a crash), `asked to stop (SIGTERM)` and the
+other signalled exits, and `uncaught exception`/`unhandled rejection` with the
+message. SIGKILL and a native abort cannot be recorded — which is precisely why
+the step is written first.
+
+The app reads it two ways, and the distinction matters. While the boot is still
+running the card shows the step **verbatim** (`Boot record: loading
+dist/server.js`) — the file cannot say whether a process is working on that step
+or died in it, and only the runtime's state can. Once the runtime is gone the
+card shows what the record **means** (`How the boot went`), and that sentence is
+appended to the failure message in place of the old "the embedded runtime
+exited": "died while loading the server, before it printed anything" and "died
+after the server loaded, before it answered" point at different causes.
+
+**A heap limit that makes the kill not happen.** The failure this was written
+for is memory. With `largeHeap` the app asks for a large heap, and V8 — which
+sizes its own heap from the *device's* memory unless someone says otherwise —
+is then free to grow into the gigabytes, while Android kills the process far
+below that. So node is now started with a cap derived from Android's own
+number:
+
+```
+--max-old-space-size = ⅔ × Runtime.maxMemory()
+```
+
+`Runtime.maxMemory()` is the limit Android enforces on this app (the memory
+class, or the large class the manifest asks for), so two thirds of it is a
+budget the system will actually honour; the rest is left for the payload's
+native modules and the app's own Java side. The point is not only the number:
+inside a heap limit V8 *collects* instead of growing, so a boot that was being
+killed can now fit — and if it still does not, V8 aborts with `FATAL ERROR:
+Reached heap limit`, which prints, instead of the app disappearing. Both
+numbers (Android's limit and the cap node was given) are in the runtime log's
+`memory:` line, which is what makes a phone report actionable.
+
+No cap is not the same as no limit: the flag is passed to V8 **before** the
+script name, because node parses its own options only up to that point — after
+it, the option is just an argument to the script. `runtime:contract` asserts the
+position, the derivation, the floor and the logged line, and moving the flag
+after the script fails it.
+
+`payload:install-test` reproduces the failure end to end with a payload whose
+entry calls `process.abort()`: SIGABRT in native code, no JavaScript handler,
+nothing in the gateway log — and the record still ends at `loading server.js`,
+which is the assertion that keeps this honest.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

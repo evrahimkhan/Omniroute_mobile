@@ -160,6 +160,110 @@ export function deriveGatewayPhase(input: {
   return 'idle';
 }
 
+/**
+ * What the last line of the boot record means, in one sentence — or null when
+ * there is no record to read.
+ *
+ * The record (`boot.log`, written by the bootstrap) exists for the one failure
+ * every other channel is blind to: the process is killed outright, so nothing
+ * catches it, nothing prints and no exit code is ever reported. The app is left
+ * holding a log that ends at `starting server.js` and a spinner, which is the
+ * same evidence whether the payload called `process.exit`, ran out of memory, or
+ * died in native code.
+ *
+ * The record is written *before* each step, so its last line is the step that was
+ * in progress when the process died. That makes the sentence a fact rather than
+ * an inference — and the difference matters: "died while loading the server"
+ * (a broken payload or a missing native module) and "died after the server
+ * loaded, before it answered" (memory, or the server's own init) lead to
+ * different fixes.
+ *
+ * Deliberately keyed on the bootstrap's own wording, so `gateway:test` can hold
+ * the two together: every marker this matches is asserted to exist in
+ * `gateway/bootstrap.mjs`.
+ */
+export function bootRecordStep(text: string): string | null {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+  // "07 loading dist/server.js" — the sequence number is the record's own order,
+  // and the step is everything after it.
+  return lines[lines.length - 1].replace(/^\d+\s+/, '');
+}
+
+/**
+ * What the last recorded step *means* — only ever shown once the process is gone.
+ *
+ * Kept separate from {@link bootRecordStep} on purpose: "it died while loading
+ * the server" is a conclusion, and the record alone cannot support it while the
+ * process is still running. The card shows the verbatim step for a boot in
+ * progress and this sentence, which assumes a death, only for one that ended.
+ */
+export function describeBootTrace(text: string): string | null {
+  const last = bootRecordStep(text);
+  if (!last) return null;
+  const match = (...patterns: RegExp[]) => {
+    for (const pattern of patterns) {
+      const found = pattern.exec(last);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  let found = match(/^the process is exiting \(code (-?\d+)\)$/);
+  if (found) {
+    return found[1] === '0'
+      ? 'The gateway process ended normally, so something stopped it rather than crashed it.'
+      : `The gateway process ended itself (exit code ${found[1]}). Something inside the payload called ` +
+          `process.exit — that is not a crash, and the payload's own output above says why.`;
+  }
+
+  found = match(/^asked to stop \((\w+)\)$/);
+  if (found) {
+    return `The app was asked to stop (${found[1]}), so the gateway was stopped with it. Android does ` +
+      `this to background apps it wants gone: keeping the notification on is what avoids it.`;
+  }
+
+  // The two the payload starts with: its own crash, recorded before the end.
+  found = match(/^(?:uncaught exception|unhandled rejection): ([\s\S]+)$/);
+  if (found) {
+    const first = found[1].split('\n')[0].trim();
+    return `The gateway process crashed on its own: ${first}`;
+  }
+
+  found = match(/^loading ([\s\S]+)$/);
+  if (found) {
+    return (
+      `The process died while loading ${found[1]}, before the server printed anything — so it was ` +
+      `killed while node was reading the payload, not by an error the server could report. If the ` +
+      `message above mentions no memory or signal, the payload itself is the suspect.`
+    );
+  }
+
+  found = match(/^([\s\S]+) loaded; waiting for the server to answer$/);
+  if (found) {
+    return `The server module loaded, and the process died before it answered — after the payload was ` +
+      `read, so the failure is in starting the server rather than in finding it.`;
+  }
+
+  if (match(/^the server is answering$/)) {
+    return 'The server answered, and the process died after that — so the gateway ran, and something later stopped it.';
+  }
+  if (match(/^the server never answered$/)) {
+    return 'The server loaded but never answered on its port within the time allowed.';
+  }
+  if (match(/^installing the payload$/)) {
+    return 'The process died during the install, before the payload was in place.';
+  }
+  if (match(/^the payload is installed$/)) {
+    return 'The process died after installing the payload and before starting it.';
+  }
+  match(/^runtime ready on node /);
+  return 'The boot record stopped at the runtime starting, before anything else could be recorded.';
+}
+
 /** Last few meaningful log lines, for when something goes wrong. */
 export function gatewayLogTail(log: string, lines = 8): string {
   return log

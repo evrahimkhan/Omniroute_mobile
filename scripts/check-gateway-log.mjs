@@ -111,16 +111,24 @@ async function main() {
       gatewayNeverRan,
       describeRuntimeExit,
       deriveGatewayPhase,
+      describeBootTrace,
+      bootRecordStep,
     } = await import(pathToFileURL(file).href);
 
     const failures = [];
+    // Counted, not calculated: the summary used to multiply the sample table by
+    // two and add a constant, so checks added anywhere else were reported
+    // without being counted — a number that says nothing about what ran.
+    let checks = 0;
     const check = (label, ok) => {
+      checks += 1;
       if (!ok) failures.push(label);
     };
 
     // Every sample line must still rest on text the bootstrap really prints.
     const bootstrap = readFileSync(BOOTSTRAP, 'utf8');
     for (const [line, , , anchor] of CASES) {
+      checks += 1;
       if (!anchor) {
         failures.push(`${line} → case has no anchor`);
       } else if (!line.includes(anchor)) {
@@ -133,6 +141,7 @@ async function main() {
     }
 
     for (const [line, kind, detail] of CASES) {
+      checks += 2;
       const got = gatewayProgress(line);
       if (!got) {
         failures.push(`${line} → nothing (expected kind "${kind}")`);
@@ -190,6 +199,84 @@ async function main() {
       describeGatewayLog('[gateway] downloaded 8.1 MB (7%)').phase === 'installing'
     );
     check('empty log → null', describeGatewayLog('').phase === null);
+
+    // --- the boot record -----------------------------------------------------
+    //
+    // Every marker here is written by `openBootLog`/`bootTrace` in the bootstrap
+    // and matched by `describeBootTrace`, so the two are checked against each
+    // other: the anchor must be in the script, and the sentence must name the
+    // step. That pairing is the point — the record is only worth writing if the
+    // app reads the same words, and a reworded marker fails here by name.
+    const BOOT_CASES = [
+      [
+        '01 runtime ready on node v24.20.0 (pid 1234)',
+        'before anything else',
+        'runtime ready on node ',
+      ],
+      ['02 installing the payload', 'during the install', 'installing the payload'],
+      ['03 the payload is installed', 'after installing the payload', 'the payload is installed'],
+      ['04 loading dist/server.js', 'died while loading dist/server.js', 'loading ${entry}'],
+      [
+        '05 dist/server.js loaded; waiting for the server to answer',
+        'died before it answered',
+        'loaded; waiting for the server to answer',
+      ],
+      ['06 the server is answering', 'The server answered', 'the server is answering'],
+      ['07 the server never answered', 'never answered on its port', 'the server never answered'],
+      ['08 the process is exiting (code 1)', 'ended itself (exit code 1)', 'the process is exiting (code '],
+      ['09 the process is exiting (code 0)', 'ended normally', 'the process is exiting (code '],
+      ['10 asked to stop (SIGTERM)', 'asked to stop (SIGTERM)', 'asked to stop (${signal})'],
+      ['11 uncaught exception: Error: boom', 'crashed on its own: Error: boom', 'uncaught exception: '],
+      ['12 unhandled rejection: Error: nope', 'crashed on its own: Error: nope', 'unhandled rejection: '],
+    ];
+    for (const [line, expected, anchor] of BOOT_CASES) {
+      checks += 2;
+      const said = describeBootTrace(line);
+      if (!said) {
+        failures.push(`boot record: ${line} → nothing`);
+        continue;
+      }
+      if (!said.includes(expected)) {
+        failures.push(`boot record: ${line} → ${JSON.stringify(said)} does not mention ${expected}`);
+      }
+      if (!bootstrap.includes(anchor)) {
+        failures.push(
+          `boot record: ${line} → anchor ${JSON.stringify(anchor)} is gone from gateway/bootstrap.mjs`
+        );
+      }
+    }
+
+    // The record's whole reason for existing: the *last* line is the answer, and
+    // the earlier ones must not be mistaken for it.
+    check(
+      'the last recorded step is the one reported',
+      (describeBootTrace('04 loading dist/server.js\n05 dist/server.js loaded; waiting for the server to answer') ?? '')
+        .includes('died before it answered')
+    );
+    check(
+      'an empty record says nothing at all',
+      describeBootTrace('') === null && describeBootTrace('   \n') === null
+    );
+
+    // The step without the conclusion: this is what a boot in progress shows, so
+    // it must be the file's own words with only the sequence number removed.
+    check(
+      'the recorded step is reported verbatim',
+      bootRecordStep('01 runtime ready on node v24.20.0 (pid 9)\n02 loading dist/server.js') ===
+        'loading dist/server.js'
+    );
+    check('no record means no step', bootRecordStep('') === null && bootRecordStep('\n ') === null);
+    check(
+      'a step that happens to start with digits keeps them',
+      bootRecordStep('07 404.html could not be read') === '404.html could not be read'
+    );
+    // Written ahead of the step: a killed process leaves the step it was in, not
+    // the one it finished.
+    check(
+      'a record that stops at the load names the load',
+      (describeBootTrace('01 runtime ready on node v24.20.0 (pid 1)\n02 loading dist/server.js') ?? '')
+        .includes('while loading dist/server.js')
+    );
 
     check(
       'an empty log means the gateway script never ran',
@@ -281,7 +368,7 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(
-      `gateway:test — OK (${CASES.length * 2 + 26} assertions, ${CASES.length} lines anchored to the bootstrap)\n`
+      `gateway:test — OK (${checks} assertions, ${CASES.length + BOOT_CASES.length} lines anchored to the bootstrap)\n`
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

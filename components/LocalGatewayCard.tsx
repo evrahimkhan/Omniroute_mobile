@@ -392,6 +392,25 @@ export default function LocalGatewayCard({ onUse }: Props) {
       ) : null}
 
       {/*
+        How far the boot got, from the record the bootstrap writes *before* each
+        step. While the boot is still running that step is shown verbatim — the
+        file cannot say whether a process is working on it or died in it, and the
+        only thing that can is the runtime's own state. Once it is gone, the
+        record's meaning is the one piece of evidence a killed process leaves.
+      */}
+      {phase === 'failed' && state?.bootTrace ? (
+        <>
+          <Text style={styles.logLabel}>How the boot went</Text>
+          <Text style={styles.log}>{state.bootTrace}</Text>
+        </>
+      ) : state?.bootStep && (phase === 'starting' || phase === 'installing') ? (
+        <>
+          <Text style={styles.logLabel}>Boot record</Text>
+          <Text style={styles.log}>{state.bootStep}</Text>
+        </>
+      ) : null}
+
+      {/*
         Android's own account of the last abnormal exit. Shown above the logs
         because it is the answer to "the app just disappeared", and the one piece
         of evidence a killed process cannot leave behind itself.

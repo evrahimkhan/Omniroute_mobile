@@ -56,6 +56,22 @@ private object NodeRuntimeNative {
 }
 
 /** One request to start the runtime, in the shape the app asked for it. */
+/**
+ * The cap used when Android will not say how much memory the app may have.
+ *
+ * Deliberately conservative: too small a cap fails a boot that would have fitted
+ * (loudly, with V8's own heap-limit message), while no cap fails it silently.
+ */
+private const val DEFAULT_HEAP_CAP_MB = 320
+
+/**
+ * The floor under the derived cap.
+ *
+ * A device that reports a tiny budget, or a runtime read that fails, must not
+ * produce a heap too small to start node at all.
+ */
+private const val MIN_HEAP_CAP_MB = 192
+
 internal data class RuntimeStartRequest(
   val scriptPath: String,
   val args: List<String>,
@@ -145,6 +161,36 @@ internal object NodeRuntimeHost {
    * evidence available afterwards. Written before the runtime starts, into both
    * logs.
    */
+  /**
+   * The V8 heap node is allowed, in MB, derived from Android's own number.
+   *
+   * `Runtime.maxMemory()` is the limit Android enforces on this app's heap — the
+   * memory class, or the large class the manifest asks for — which makes it a
+   * fair statement of what this process can use. V8 has no idea about it: left
+   * alone it sizes its heap from the device's total memory, and on a phone with
+   * several gigabytes it will happily grow past what the system will tolerate.
+   * The system then kills the process, and a low-memory kill leaves nothing
+   * behind — no message, no stack, no exit code — which is exactly the death
+   * this code has been chasing: the payload unpacks, node starts the server, and
+   * the app is simply gone.
+   *
+   * Bounding V8 changes the outcome, not just the reporting: inside a heap limit
+   * it collects instead of growing, so a boot that was being killed can fit. If
+   * it still runs out, V8 aborts with `FATAL ERROR: Reached heap limit`, which
+   * prints — a diagnosable failure instead of a disappearance.
+   *
+   * Two thirds, because V8's heap is not the whole process: the payload's native
+   * modules (sharp, onnxruntime) and the runtime's own metadata allocate outside
+   * it, and the Java side of the app needs its share too. The floor keeps a
+   * pathological budget (or a device that reports nonsense) from producing a cap
+   * too small to boot at all.
+   */
+  private fun heapCapMb(context: Context): Int {
+    val budget = runCatching { Runtime.getRuntime().maxMemory() / (1024 * 1024) }.getOrDefault(0L)
+    if (budget <= 0L) return DEFAULT_HEAP_CAP_MB
+    return (budget.toInt() * 2 / 3).coerceAtLeast(MIN_HEAP_CAP_MB)
+  }
+
   fun memoryFacts(context: Context): String {
     val runtime = Runtime.getRuntime()
     val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -153,7 +199,8 @@ internal object NodeRuntimeHost {
     val largeHeap = (context.applicationInfo.flags and ApplicationInfo.FLAG_LARGE_HEAP) != 0
     val heapMaxMb = runtime.maxMemory() / (1024 * 1024)
     val heapUsedMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
-    return "memory: heap limit ${heapMaxMb} MB, used ${heapUsedMb} MB, " +
+    return "memory: heap limit ${heapMaxMb} MB (node is capped at ${heapCapMb(context)} MB), " +
+      "used ${heapUsedMb} MB, " +
       "device free ${info.availMem / (1024 * 1024)} MB of ${info.totalMem / (1024 * 1024)} MB, " +
       "lowMemory=${info.lowMemory}, largeHeap=$largeHeap"
   }
@@ -307,7 +354,11 @@ internal object NodeRuntimeHost {
       env["NODE_ENV"] = "production"
       env.putAll(request.env)
 
-      val argv = (listOf("node", request.scriptPath) + request.args).toTypedArray()
+      // Node parses its own options from argv up to the script name, so the heap
+      // cap has to go between them — after the script it would be handed to the
+      // script as an argument instead.
+      val nodeFlags = listOf("--max-old-space-size=${heapCapMb(context)}")
+      val argv = (listOf("node") + nodeFlags + request.scriptPath + request.args).toTypedArray()
       val envPairs = env.map { (key, value) -> "$key=$value" }.toTypedArray()
 
       File(request.logFilePath).parentFile?.mkdirs()
@@ -327,8 +378,11 @@ internal object NodeRuntimeHost {
           markRuntime(
             context,
             request.logFilePath,
+            // The flags are listed with the arguments because this line is the
+            // record of *how* node was started, and a cap that is not in it
+            // cannot be checked from a phone.
             "[node-runtime] starting node ${runtimeVersion()}: ${request.scriptPath}" +
-              (if (request.args.isEmpty()) "" else " ${request.args.joinToString(" ")}")
+              " ${(nodeFlags + request.args).joinToString(" ")}"
           )
           val code = try {
             NodeRuntimeNative.nativeStart(argv, envPairs, request.workingDirectory, request.logFilePath)

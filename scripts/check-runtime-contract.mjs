@@ -42,6 +42,8 @@ const FILES = {
   prefs: join(MODULE, 'android', 'src', 'main', 'java', 'expo', 'modules', 'noderuntime', 'StartPrefs.kt'),
   manifest: join(MODULE, 'android', 'src', 'main', 'AndroidManifest.xml'),
   installer: join(ROOT, 'lib', 'gatewayInstaller.ts'),
+  log: join(ROOT, 'lib', 'gatewayLog.ts'),
+  card: join(ROOT, 'components', 'LocalGatewayCard.tsx'),
   bootstrap: join(ROOT, 'gateway', 'bootstrap.mjs'),
 };
 
@@ -325,6 +327,34 @@ check(
 );
 
 check(
+  'the app reads the boot record instead of only watching the runtime die',
+  sources.installer.includes("const BOOT_LOG_FILE = 'boot.log'") &&
+    sources.installer.includes('readBootRecord()') &&
+    sources.installer.includes('describeBootTrace(bootRecord)') &&
+    sources.bootstrap.includes("const BOOT_LOG_NAME = 'boot.log'") &&
+    sources.bootstrap.includes('function bootTrace('),
+  'a process killed outright writes nothing on the way out, so the record has to be written before the step'
+);
+
+// The record is only worth writing because it is flushed: appendFileSync would
+// leave the last line in a buffer that a SIGKILL takes with it.
+check(
+  'the boot record is flushed, not buffered',
+  sources.bootstrap.includes('fsyncSync(fd)') &&
+    sources.bootstrap.includes('const fd = openSync(bootLogPath, \'a\')'),
+  'an unflushed write is a write that never happened'
+);
+
+check(
+  'the record is read verbatim for a boot in progress, and interpreted only after a death',
+  sources.log.includes('export function bootRecordStep(') &&
+    sources.installer.includes('const bootStep = bootRecordStep(bootRecord)') &&
+    sources.card.includes("phase === 'failed' && state?.bootTrace") &&
+    sources.card.includes("state?.bootStep && (phase === 'starting' || phase === 'installing')"),
+  'while the process is alive the record cannot say whether it died in that step or is working on it'
+);
+
+check(
   'the service is started before the runtime, not after',
   sources.module.indexOf('GatewayService.start(context)') <
     sources.module.indexOf('NodeRuntimeHost.start(context, request)'),
@@ -360,6 +390,31 @@ check(
   sources.host.includes('"[node-runtime] ${memoryFacts(context)}"') &&
     sources.host.includes('ActivityManager.MemoryInfo()'),
   'a runtime killed for memory leaves no other evidence at all'
+);
+
+// The kill this whole section exists for: V8 sizes its heap from the device's
+// memory unless told otherwise, so with `largeHeap` it is free to grow past what
+// Android will tolerate — and that kill leaves nothing behind.
+check(
+  'node is given a heap limit derived from the app\'s real budget',
+  sources.host.includes('Runtime.getRuntime().maxMemory()') &&
+    sources.host.includes('--max-old-space-size=${heapCapMb(context)}'),
+  'an unbounded V8 heap is a silent low-memory kill waiting for a big payload'
+);
+
+check(
+  'the limit is placed where node parses options, not after the script',
+  sources.host.includes('listOf("node") + nodeFlags + request.scriptPath + request.args') &&
+    sources.host.includes('(nodeFlags + request.args).joinToString(" ")'),
+  'after the script name an option is just an argument, and the cap never applies'
+);
+
+check(
+  'a wrong budget cannot produce a heap too small to start node',
+  sources.host.includes('MIN_HEAP_CAP_MB') &&
+    sources.host.includes('.coerceAtLeast(MIN_HEAP_CAP_MB)') &&
+    sources.host.includes('runCatching { Runtime.getRuntime().maxMemory()'),
+  'a failed read or a nonsense number must not turn into a boot that cannot fit'
 );
 
 check(

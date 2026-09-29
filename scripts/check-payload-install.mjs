@@ -93,7 +93,26 @@ function packFixture(sourceDir, outPath, entry) {
   return `${outPath}.json`;
 }
 
-/** A free loopback port, released immediately for the child to claim. */
+/**
+ * A payload that dies *the way this failure actually looks*: the process is gone
+ * while loading the entry, with no exception, no exit code and nothing in the
+ * gateway log after `starting server.js`.
+ *
+ * `process.abort()` is deliberate: it raises SIGABRT in native code, so no
+ * JavaScript handler runs and nothing can be flushed on the way out. An OOM kill
+ * or a native crash in a payload module looks exactly like this to the app, and
+ * the whole point of the boot record is that its last line is already on disk
+ * when that happens.
+ */
+function fixtureAbortServer(marker) {
+  return `console.log(${JSON.stringify(marker + ' starting')});
+process.abort();
+`;
+}
+
+/**
+ * A free loopback port, released immediately for the child to claim.
+ */
 async function freePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -162,10 +181,16 @@ async function main() {
   // Only a wrong installer would run this: it is the decoy for the entry test.
   writeFileSync(join(npmShaped, 'server.js'), 'console.log("DECOY RAN");\nprocess.exit(1);\n');
 
+  const aborting = join(work, 'aborting');
+  mkdirSync(aborting, { recursive: true });
+  writeFileSync(join(aborting, 'server.js'), fixtureAbortServer('ABORT'));
+
   const standaloneTar = join(work, 'standalone.tar.gz');
   const npmTar = join(work, 'npm.tar.gz');
+  const abortTar = join(work, 'aborting.tar.gz');
   const standaloneManifest = packFixture(standalone, standaloneTar, 'server.js');
   const npmManifest = packFixture(npmShaped, npmTar, 'dist/server.js');
+  const abortManifest = packFixture(aborting, abortTar, 'server.js');
 
   // --- serve the archives, manifest included -------------------------------
   const served = new Map([
@@ -173,6 +198,8 @@ async function main() {
     ['/standalone.tar.gz.json', readFileSync(standaloneManifest)],
     ['/npm.tar.gz', readFileSync(npmTar)],
     ['/npm.tar.gz.json', readFileSync(npmManifest)],
+    ['/aborting.tar.gz', readFileSync(abortTar)],
+    ['/aborting.tar.gz.json', readFileSync(abortManifest)],
   ]);
   // Two payloads served badly on purpose, to exercise the resume path. A phone
   // that leaves Wi-Fi range does not get a clean error: the connection either
@@ -438,6 +465,43 @@ async function main() {
   // runtime log is a process-wide stdout/stderr capture that also collects
   // Android WebView's chatter. If that file is missing or stale, the app cannot
   // tell an install that failed from one that never ran.
+  // --- case 7: a payload killed mid-boot ----------------------------------
+  //
+  // The failure the boot record exists for, reproduced on purpose: the install
+  // succeeds, node starts the entry, and the process dies in native code with
+  // nothing printed. The gateway log ends at `starting server.js` — and the
+  // record has to say what the process was doing when it went.
+  const abortDir = join(work, 'install-aborting');
+  const aborted = await run(
+    'aborting',
+    abortDir,
+    {
+      GATEWAY_PAYLOAD_URL: `${origin}/aborting.tar.gz`,
+      GATEWAY_PAYLOAD_SHA256_URL: `${origin}/aborting.tar.gz.json`,
+    },
+    // Wait for the payload's own last words: the abort follows immediately, and
+    // stopping the child before it happens would test nothing.
+    { ready: (text) => text.includes('ABORT starting') || text.includes('[gateway] FAILED') }
+  );
+  const bootText = existsSync(join(abortDir, 'boot.log')) ? readFileSync(join(abortDir, 'boot.log'), 'utf8') : '';
+  check('a payload killed mid-boot: the boot record exists', bootText.includes('runtime ready on node'));
+  check(
+    'and its last line is the step it died in, written before the import',
+    bootText.trim().endsWith('loading server.js')
+  );
+  check(
+    'the record does not claim the module loaded, because the process was killed',
+    !bootText.includes('loaded; waiting for the server to answer')
+  );
+  check(
+    'the gateway log reports no failure at all, which is why the record exists',
+    !readFileSync(join(abortDir, GATEWAY_LOG_NAME), 'utf8').includes('[gateway] FAILED:')
+  );
+  check(
+    'the payload really was killed in native code, not by an exception',
+    aborted.output.includes('ABORT starting') && !aborted.output.includes('[gateway] FAILED:')
+  );
+
   const logText = existsSync(join(install1, GATEWAY_LOG_NAME))
     ? readFileSync(join(install1, GATEWAY_LOG_NAME), 'utf8')
     : '';
@@ -460,7 +524,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 36;
+  const total = 41;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

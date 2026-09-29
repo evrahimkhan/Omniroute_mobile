@@ -25,7 +25,9 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import NodeRuntime from '../modules/node-runtime';
 import { BOOTSTRAP_SCRIPT } from './gateway/bootstrapScript.generated';
 import {
+  bootRecordStep,
   deriveGatewayPhase,
+  describeBootTrace,
   describeGatewayLog,
   describeRuntimeExit,
   gatewayLogTail,
@@ -143,6 +145,23 @@ export interface GatewayState {
    * guess.
    */
   previousExit: string | null;
+  /**
+   * What the last line of the boot record means, when there is a record.
+   *
+   * Answers the question the other channels cannot: how far the boot got before
+   * the process was killed outright. Null when nothing was ever recorded (a
+   * runtime that never started) and on a genuinely clean boot.
+   */
+  bootTrace: string | null;
+  /**
+   * The last step the boot record names, verbatim — the same fact as
+   * {@link bootTrace} without the conclusion drawn from it.
+   *
+   * Shown while the boot is still in progress, when "it died while loading" would
+   * be a guess: a step recorded minutes ago and a step being worked on right now
+   * read identically in the file, and only the runtime's state tells them apart.
+   */
+  bootStep: string | null;
   /** The URL to point the WebView at once the phase is `ready`. */
   url: string;
 }
@@ -227,12 +246,25 @@ const GATEWAY_LOG_FILE = 'gateway.log';
  */
 const RUNTIME_LOG_FILE = 'runtime.log';
 
+/**
+ * The bootstrap's boot record. Mirrors its BOOT_LOG_NAME.
+ *
+ * Written only by the bootstrap, and written *ahead* of each step with an fsync,
+ * so unlike the process-wide capture it is both trustworthy as evidence and
+ * still there when the process is killed outright.
+ */
+const BOOT_LOG_FILE = 'boot.log';
+
 function gatewayLogPath(): string {
   return `${NodeRuntime.getPaths().gatewayDir}/${GATEWAY_LOG_FILE}`;
 }
 
 function runtimeLogPath(): string {
   return `${NodeRuntime.getPaths().gatewayDir}/${RUNTIME_LOG_FILE}`;
+}
+
+function bootLogPath(): string {
+  return `${NodeRuntime.getPaths().gatewayDir}/${BOOT_LOG_FILE}`;
 }
 
 /**
@@ -262,6 +294,17 @@ export async function readRuntimeOutput(maxBytes = 64 * 1024): Promise<string> {
   return lines.slice(-40).join('\n').trim();
 }
 
+/**
+ * The boot record, as text.
+ *
+ * Small on purpose (a dozen lines), and read on its own so a crash report can
+ * quote it without the firehose's noise. Never used to decide state: it says how
+ * a *previous* process died, which the runtime's own status already covers.
+ */
+export async function readBootRecord(maxBytes = 32 * 1024): Promise<string> {
+  return (await NodeRuntime.readFile(bootLogPath(), maxBytes).catch(() => '')) ?? '';
+}
+
 export async function readGatewayLog(maxBytes = 64 * 1024): Promise<string> {
   const runtimeLog = await NodeRuntime.readFile(runtimeLogPath(), maxBytes).catch(() => null);
   const gatewayLog = await NodeRuntime.readFile(gatewayLogPath(), maxBytes).catch(() => null);
@@ -283,6 +326,8 @@ export async function gatewayState(): Promise<GatewayState> {
       keepAlive: false,
       runtimeExited: false,
       previousExit: null,
+      bootTrace: null,
+      bootStep: null,
       logTail: '',
       runtimeTail: '',
       error: localGatewayUnavailableReason() ?? undefined,
@@ -295,6 +340,9 @@ export async function gatewayState(): Promise<GatewayState> {
   const marker = await readMarker();
   const log = await readGatewayLog();
   const runtimeTail = await readRuntimeOutput();
+  const bootRecord = await readBootRecord();
+  const bootTrace = describeBootTrace(bootRecord);
+  const bootStep = bootRecordStep(bootRecord);
   const fromLog = describeGatewayLog(log);
 
   if (status.exited || fromLog.phase === 'failed') {
@@ -305,9 +353,19 @@ export async function gatewayState(): Promise<GatewayState> {
       keepAlive: false,
       runtimeExited: Boolean(status.exited),
       previousExit: status.previousExit ?? null,
+      bootTrace,
+      bootStep,
       logTail: log,
       runtimeTail,
-      error: fromLog.error ?? describeRuntimeExit(status.exitCode, log),
+      // A printed failure is its own explanation. Without one, the runtime's exit
+      // is all we have — and the boot record says where in the boot it happened,
+      // which is the difference between "the payload is broken" and "the phone
+      // ran out of memory".
+      error:
+        fromLog.error ??
+        [describeRuntimeExit(status.exitCode, log), status.running ? null : bootTrace]
+          .filter(Boolean)
+          .join(' '),
       url,
     };
   }
@@ -326,6 +384,8 @@ export async function gatewayState(): Promise<GatewayState> {
     keepAlive,
     runtimeExited: Boolean(status.exited),
     previousExit: status.previousExit ?? null,
+    bootTrace,
+    bootStep,
     logTail: log,
     runtimeTail,
     url,

@@ -28,13 +28,17 @@
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
+  closeSync,
   createReadStream,
   createWriteStream,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   realpathSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { statfsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -144,6 +148,95 @@ function resetGatewayLog() {
   } catch {
     // As above.
   }
+}
+
+const BOOT_LOG_NAME = 'boot.log';
+
+/** Where the boot record goes; empty until a GATEWAY_DIR is known. */
+let bootLogPath = '';
+/** Line number in the record, so its order is readable without timestamps. */
+let bootSeq = 0;
+
+/**
+ * The record of how far the boot got, for a death that leaves no other trace.
+ *
+ * `gateway.log` is written synchronously too, so it always reaches the line
+ * before the crash — and that is the whole problem: the line after it, which
+ * says *what* the process was doing when it died, is the one that never gets
+ * written. On a phone this is not hypothetical: the payload unpacks, node
+ * starts the server entry, and the app is simply gone — no `FAILED:`, no
+ * stack, no exit code. Android's own exit history says why it was killed, but
+ * not where.
+ *
+ * So each step is written *before* it is taken, to its own file, with an
+ * fsync: a native abort or an OOM kill cannot flush anything on the way out,
+ * and an unflushed write is a write that never happened. The last line of this
+ * file is then a reliable answer to "how far did it get", which is the
+ * question every other channel fails to answer in exactly this failure.
+ *
+ * It is deliberately tiny and self-contained: no imports beyond node:fs, no
+ * dependencies on anything that might be the thing that is broken.
+ */
+function bootTrace(step) {
+  if (!bootLogPath) return;
+  bootSeq += 1;
+  const line = `${String(bootSeq).padStart(2, '0')} ${step}\n`;
+  try {
+    // Open, write, flush, close — every time. appendFileSync would coalesce in
+    // a buffer, which is exactly what a killed process loses.
+    const fd = openSync(bootLogPath, 'a');
+    try {
+      writeSync(fd, line);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Diagnostics must never be the reason a boot fails.
+  }
+  // Mirror into the gateway log, where the app already looks, with the same
+  // `[gateway]` shape the parser expects to skip over.
+  appendToGatewayLog(`[gateway] boot: ${step}`);
+}
+
+/** Start a fresh record in `dir`, and record the ways this process can end. */
+function openBootLog(dir) {
+  bootLogPath = path.join(dir, BOOT_LOG_NAME);
+  bootSeq = 0;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(bootLogPath, '');
+  } catch {
+    bootLogPath = '';
+    return;
+  }
+
+  // `exit` runs for an orderly end, including a `process.exit()` called from
+  // inside the payload — a case that otherwise looks exactly like a crash.
+  process.on('exit', (code) => bootTrace(`the process is exiting (code ${code})`));
+
+  // A signalled end is catchable; SIGKILL is not, and neither is a native
+  // abort. Those two are why the record is written ahead of the step.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(signal, () => {
+      bootTrace(`asked to stop (${signal})`);
+      // Recording must not change what the signal does: drop this handler and
+      // raise it again so the default action still happens.
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
+    });
+  }
+
+  // An uncaught error would otherwise end the process with the same silence as
+  // a kill on some Android builds; here it lands in both logs first.
+  process.on('uncaughtException', (err) => {
+    bootTrace(`uncaught exception: ${err && err.stack ? err.stack : String(err)}`);
+    fatal(err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    bootTrace(`unhandled rejection: ${reason && reason.stack ? reason.stack : String(reason)}`);
+    fatal(reason);
+  });
 }
 
 function log(...args) {
@@ -613,6 +706,11 @@ async function main() {
   const gatewayDir = process.env.GATEWAY_DIR;
   if (!gatewayDir) fatal(new Error('GATEWAY_DIR is required'));
 
+  // Before the install, not just before the boot: a payload that dies while
+  // unpacking (a full disk, a killed process) leaves the same silence.
+  openBootLog(gatewayDir);
+  bootTrace(`runtime ready on node ${process.version} (pid ${process.pid})`);
+
   const appDir = path.join(gatewayDir, 'app');
   // Two payload shapes are in play: a packaged `npm` tree (entry
   // dist/server.js) and a Next `output: 'standalone'` tree (entry server.js).
@@ -649,6 +747,7 @@ async function main() {
       );
     }
 
+    bootTrace('installing the payload');
     const tarballPath = path.join(gatewayDir, PAYLOAD_NAME);
     const partPath = `${tarballPath}.part`;
 
@@ -752,6 +851,7 @@ async function main() {
       );
       // The tarball has served its purpose; keeping it doubles the footprint.
       await fs.rm(tarballPath, { force: true });
+      bootTrace('the payload is installed');
       log('install complete');
     } catch (err) {
       // Keep a partial download: it is the resume point for the next attempt.
@@ -771,11 +871,15 @@ async function main() {
   process.chdir(path.dirname(serverEntry));
 
   log(`starting ${entry} on ${process.env.HOSTNAME}:${process.env.PORT}`);
+  // Written before the import, because this is the step the app has been seen
+  // to die in — and a process that dies here prints nothing at all.
+  bootTrace(`loading ${entry}`);
   try {
     await import(pathToFileURL(serverEntry).href);
   } catch (err) {
     fatal(err);
   }
+  bootTrace(`${entry} loaded; waiting for the server to answer`);
 
   // The module is loaded. From here on nothing in this process writes to the
   // gateway's log unless something goes wrong, so "did the server come up?" is
@@ -793,6 +897,7 @@ async function main() {
     try {
       const res = await fetch(healthUrl);
       if (res.ok) {
+        bootTrace('the server is answering');
         log(`the server is answering on ${healthUrl}`);
         return;
       }
@@ -800,6 +905,7 @@ async function main() {
       // Not up yet. Keep waiting quietly: this is normal for a first boot.
     }
   }
+  bootTrace('the server never answered');
   log(`warning: ${healthUrl} did not answer within ${Math.round(HEALTH_TIMEOUT_MS / 1000)}s`);
 }
 

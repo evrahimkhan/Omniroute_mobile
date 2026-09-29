@@ -42,3 +42,9 @@ yarn-error.*
 
 # OmniRoute source — cloned into place by the CI workflows (see .github/workflows)
 /source/
+
+# Embedded Node runtime — placed by scripts/fetch-node-runtime.mjs.
+# The .so is ~18 MB per ABI and is downloaded during the build, not committed;
+# the generated APK is verified to contain it (scripts/assert-apk-runtime.mjs).
+/modules/node-runtime/android/src/main/jniLibs/
+/modules/node-runtime/android/src/main/cpp/include/

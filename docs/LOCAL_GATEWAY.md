@@ -1,6 +1,6 @@
 # Local Gateway — hosting the npm OmniRoute inside the app
 
-Status: **Phase 1 (runtime packaging) — in progress.**
+Status: **Phase 2 (JNI bridge) — implemented, unverified on hardware.**
 Goal: after installing the APK, the user taps *Install local gateway* and the app
 sets up OmniRoute **on the phone** — no separate server, no Termux, nothing bundled
 in the APK except a JavaScript runtime.
@@ -93,18 +93,98 @@ tarball 121 MB compressed / 431 MB unpacked / 21,898 files — hence the
 
 ## 5. Implementation phases
 
-- **Phase 1 — runtime packaging (this change).** `expo-build-properties` sets
+- **Phase 1 — runtime packaging (done).** `expo-build-properties` sets
   `useLegacyPackaging` (→ `android:extractNativeLibs="true"`);
   `scripts/fetch-node-runtime.mjs` downloads the runtime zip and copies
-  `libnode.so` per ABI into `android/app/src/main/jniLibs/<abi>/`. CI asserts the
-  built APK really contains it.
-- **Phase 2 — JNI bridge.** Kotlin `NodeRuntime` module + C++ shim that starts
-  libnode on a background thread with `startNodeWithArguments`, plus an
-  Expo Module wrapper. Cannot be validated without a device.
+  `libnode.so` per ABI into `modules/node-runtime/android/src/main/jniLibs/<abi>/`,
+  plus the public headers into `.../src/main/cpp/include/`. CI asserts the built
+  APK really contains the library.
+- **Phase 2 — JNI bridge (this change).** Local Expo module `modules/node-runtime`:
+  Kotlin `NodeRuntime` over a C++ shim (`node-runtime-jni.cpp`) that starts
+  libnode with `node::Start` on a dedicated thread. See §5a for the contract.
+  The *mechanics* are verified off-device (the shim compiles against the real
+  Node headers, links, and exports the JNI symbols Kotlin looks for — CI does
+  this with the NDK on every build), but **nothing here has run on a phone yet**:
+  whether the runtime actually boots inside an Android app process is the open
+  question.
 - **Phase 3 — install flow.** Download the tarball, verify the integrity hash,
   extract, write the bootstrap script, start, poll `/healthz`, save the URL.
+  **Blocked on a discovery that changes the plan — see §5b.**
 - **Phase 4 — UI/UX.** "Local gateway" card in Settings/onboarding: install
   progress, start/stop, data wipe, and honest messaging about degraded features.
+
+### 5a. The Phase 2 module contract
+
+`modules/node-runtime` is a local Expo module (autolinked by
+`expo-modules-autolinking`; no `app.json` entry needed). Native name:
+`NodeRuntime`.
+
+| JS | Kotlin | Notes |
+|---|---|---|
+| `isAvailable()` | checks that both `.so`s loaded | a build without the fetch step reports `false` instead of crashing |
+| `getUnavailableReason()` | the `dlopen` error, or `null` | |
+| `getRuntimeVersion()` | `NODE_VERSION` from the headers | |
+| `getStatus()` | `available / running / exited / exitCode / scriptPath / startedAt / logFilePath / pid` | |
+| `start(options)` | starts the thread, returns immediately | resolves once the thread is up, **not** once the gateway listens — poll `127.0.0.1:20128` for that |
+| `readLog(maxBytes)` | tail of the runtime's stdout+stderr | |
+| `clearLog()` | truncates it | |
+| event `onExit` | `{ code, scriptPath }` | |
+
+Decisions worth keeping:
+
+- **`node::Start` on a dedicated thread with an 8 MB stack.** V8 recurses deeply
+  and the default thread stack is not enough. `stackSizeMb` is clampable 2–64.
+- **The environment is set *before* the runtime boots**, from the JNI side
+  (`setenv`), because Node reads `NODE_OPTIONS`, `NODE_ICU_DATA`, `NODE_EXTRA_CA_CERTS`
+  and friends during startup — assigning them from JavaScript is too late.
+  `TMPDIR` (→ `cacheDir`) is not optional: Android has no `/tmp` and no `TMPDIR`,
+  so `os.tmpdir()` throws until it is set. `HOME` → `filesDir`, `NODE_ENV=production`.
+- **stdout/stderr are redirected to `files/node-runtime/node.log`** before the
+  runtime starts. A native library has no console on Android; without this the
+  reason the runtime failed to boot would go nowhere. `readLog()` surfaces it.
+- **The runtime starts at most once per process.** nodejs-mobile cannot restart
+  a `node::Start` that has returned; `start()` throws on the second call and the
+  UI must offer "restart the app" instead of pretending to cycle the gateway.
+- **Linked by name, not by path.** The shim links `-lnode` with a `-L` search
+  path rather than the absolute path of the `.so`, because the linker records
+  `DT_NEEDED` as the soname if present and otherwise as whatever path it was
+  given — an absolute build path would not resolve on-device, where the runtime
+  is extracted to the app's native library dir. Verified on the built artifact:
+  `DT_NEEDED: libnode.so`.
+- **`ANDROID_STL=c++_shared`** — `libnode.so` NEEDs `libc++_shared.so` (the
+  upstream project says so in its own Android smoke test), and `.so` files never
+  carry a static copy of the STL ABI.
+- The CMake step **degrades instead of failing**: if no runtime is present for
+  the ABI being built (an emulator JS-only dev client, say) it compiles stubs
+  that report `available: false`.
+
+### 5b. Phase 3 blocker: the tarball has no dependencies
+
+Verified against the published `omniroute@3.8.50` tarball: it contains **zero
+`node_modules` entries**, and `dist/server.js` does `require('next')`,
+`require('next/dist/server/lib/start-server')` and `require('./http-method-guard.cjs')`.
+`dist/.build/next/` holds `BUILD_ID`, the route manifests, `server/` and
+`static/` — but it is **not** a Next.js standalone output (no
+`standalone/server.js`, no vendored modules), so importing `dist/server.js`
+alone cannot boot. `bin/cli/commands/serve.mjs` has no in-process branch either:
+it `spawn`s a child process in both `runDaemon()` and `runWithoutRecovery()`,
+which is exactly what we cannot do.
+
+So Phase 3 needs one of:
+
+1. **Install dependencies on-device** — run npm (or an equivalent resolver)
+   inside the app against the registry after unpacking. Honest costs: a network
+   round-trip for ~77 dependencies, meaningful disk (431 MB unpacked before
+   `--omit=dev` prunes anything), and time; needs a real resolution strategy for
+   the optional native deps that cannot build on Android.
+2. **Publish a self-contained payload** — a `next build`-style output with the
+   server dependency tree vendored in, which the app downloads as one archive.
+   Puts the work in CI instead of on the phone, and is the only option that
+   works offline.
+
+Either way the payload budget is the 431.6 MB / 21,898 files already measured.
+This is a Phase 3 decision, not a Phase 2 one — but it must be settled before
+the install flow is written, because it decides what "installing" means.
 
 ## 6. What will not work on-device
 

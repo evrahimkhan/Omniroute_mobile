@@ -107,6 +107,23 @@ jobs:
         run: |
           yes | "$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
+      # The Node runtime module builds C++ from source (modules/node-runtime/
+      # android/src/main/cpp), so the build needs CMake in the SDK. The runner
+      # images usually ship one; if not, Gradle would try to download it mid-
+      # build, which is slower and fails in confusing ways when it goes wrong.
+      - name: Ensure CMake is available
+        env:
+          ANDROID_SDK_HOME: ${{ steps.sdk.outputs.home }}
+        run: |
+          set -euo pipefail
+          present=$(ls "$ANDROID_SDK_HOME/cmake" 2>/dev/null || true)
+          if [ -n "$present" ]; then
+            echo "CMake already installed: $(echo "$present" | tr '\n' ' ')"
+          else
+            echo "No CMake in the SDK — installing 3.22.1"
+            yes | "$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager" "cmake;3.22.1"
+          fi
+
       # With --no-daemon, Gradle forks a single-use daemon that honours
       # org.gradle.jvmargs from gradle.properties — the `-Xmx2048m` the Expo
       # template writes. GRADLE_OPTS only sizes the *launcher* JVM and never

@@ -60,13 +60,27 @@ function main() {
     process.stdout.write(`  ✓ ${wanted}  ${human(found.uncompSize)}  (${method})\n`);
   }
 
+  // The JNI shim is built from source by the local Expo module, so its presence
+  // proves the whole chain ran: autolinking picked the module up, CMake found
+  // the runtime, and Gradle packaged the result.
+  for (const abi of opts.abis) {
+    const wanted = `lib/${abi}/libnoderuntime_jni.so`;
+    const found = entries.find((e) => e.name === wanted);
+    if (!found) {
+      problems.push(`missing ${wanted} (the JNI bridge did not build or was not packaged)`);
+      continue;
+    }
+    process.stdout.write(`  ✓ ${wanted}  ${human(found.uncompSize)}\n`);
+  }
+
   if (problems.length) {
-    process.stderr.write(`\n✖ embedded Node runtime is missing from the APK:\n  ${problems.join('\n  ')}\n`);
+    process.stderr.write(`\n✖ the APK is missing embedded runtime pieces:\n  ${problems.join('\n  ')}\n`);
     process.stderr.write(
       '\nThings to check:\n' +
         '  · did `node scripts/fetch-node-runtime.mjs` run after `expo prebuild`?\n' +
         '  · is the file named libnode.so (not node)? the packager drops non-`lib*.so` files\n' +
         '  · are the ABIs in --abis the same ones Gradle built?\n' +
+        '  · did the local module autolink? (npx expo-modules-autolinking search -p android)\n' +
         (libEntries.length
           ? `\n  native libs actually present:\n${libEntries.map((e) => `    ${e.name}`).join('\n')}\n`
           : '\n  the APK contains NO lib/ entries at all\n'),
@@ -74,7 +88,7 @@ function main() {
     process.exit(1);
   }
 
-  process.stdout.write('✓ APK carries the embedded Node runtime\n');
+  process.stdout.write('✓ APK carries the embedded Node runtime and the JNI bridge\n');
 }
 
 try {

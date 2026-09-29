@@ -88,10 +88,15 @@ How it fits together:
 
 - **The Node runtime ships inside the APK.** Android 10+ will not execute
   anything the app can write, so `libnode.so` (Node 24.20.0, from
-  `nodejs-mobile`) is placed in `jniLibs/<abi>/` and extracted by the installer
-  into the executable `/data/app` path — Google's documented approach.
-  `npm run runtime:fetch` does the placement; CI then asserts the built APK
-  really contains it (`npm run runtime:verify`).
+  `nodejs-mobile`) is placed in `modules/node-runtime/android/src/main/jniLibs/<abi>/`
+  and extracted by the installer into the executable `/data/app` path — Google's
+  documented approach. `npm run runtime:fetch` does the placement; CI then
+  asserts the built APK really contains it, and that the JNI bridge was built
+  and packaged with it (`npm run runtime:verify`).
+- **A local Expo module bridges JS to the runtime** (`modules/node-runtime`):
+  Kotlin `NodeRuntime` over a small C++ shim that calls `node::Start` on a
+  dedicated thread, with the environment (`TMPDIR`, `HOME`, …) set before boot
+  and stdout/stderr redirected into a log the app can read back.
 - **The gateway itself is downloaded after install** (~121 MB tarball → 431 MB
   unpacked), because bundling it would blow past store size limits.
 - **It runs in-process** — the CLI's daemon mode uses `child_process`, which is
@@ -100,9 +105,12 @@ How it fits together:
   imported behind `try/catch`, so their absence degrades features rather than
   breaking the server.
 
-> Status: Phase 1 (runtime packaging) is implemented. The JNI bridge that starts
-> the runtime, the install flow, and the UI land in the following phases — none
-> of it has been exercised on a real device yet.
+> Status: Phase 1 (runtime packaging) and Phase 2 (the JNI bridge) are
+> implemented; the install flow and the UI land in the following phases. The
+> bridge is verified as far as a machine without a phone can verify it — the
+> shim compiles against the real Node headers, links, and exports the symbols
+> Kotlin calls, and CI exercises that with the NDK on every APK build — but
+> **nothing has booted the runtime inside a real Android process yet**.
 
 ## CI pipeline
 

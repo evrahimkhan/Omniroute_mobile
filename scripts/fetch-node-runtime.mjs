@@ -42,10 +42,17 @@ export const RUNTIME_NODE_VERSION = '24.20.0';
 
 const KNOWN_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'];
 
+/** The local Expo module that links against the runtime. */
+const MODULE_ANDROID = join(ROOT, 'modules', 'node-runtime', 'android', 'src', 'main');
+
 function parseArgs(argv) {
   const opts = {
     abis: ['arm64-v8a', 'armeabi-v7a'],
-    out: join(ROOT, 'android', 'app', 'src', 'main', 'jniLibs'),
+    // Into the module (not the app): a library module's jniLibs are merged into
+    // the APK automatically, and keeping the runtime inside the module keeps
+    // the CMake paths short and stable.
+    out: join(MODULE_ANDROID, 'jniLibs'),
+    headersOut: join(MODULE_ANDROID, 'cpp', 'include'),
     fromZip: null,
     url: process.env.NODE_RUNTIME_URL || DEFAULT_RUNTIME_URL,
     sha256: process.env.NODE_RUNTIME_SHA256 || '',
@@ -56,6 +63,8 @@ function parseArgs(argv) {
     if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--abis') opts.abis = String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean);
     else if (arg === '--out') opts.out = resolve(argv[++i]);
+    else if (arg === '--headers-out') opts.headersOut = resolve(argv[++i]);
+    else if (arg === '--no-headers') opts.headersOut = null;
     else if (arg === '--from-zip') opts.fromZip = resolve(argv[++i]);
     else if (arg === '--url') opts.url = argv[++i];
     else if (arg === '--sha256') opts.sha256 = argv[++i];
@@ -183,6 +192,37 @@ async function main() {
     chmodSync(dest, 0o755);
     process.stdout.write(`${label}\n    → ${dest}\n`);
     written++;
+  }
+
+  // Headers: only their directory name matters, since the shim includes
+  // "node.h" / "node_version.h" directly.
+  if (opts.headersOut) {
+    const headers = entries.filter((e) => /(^|\/)include\/(node|v8|uv)\//.test(e.name) || /include\/(node|node_version)\.h$/.test(e.name));
+    if (!headers.length) {
+      process.stdout.write('· no headers found in the archive (the shim can still build if they are cached)\n');
+    } else {
+      let headerCount = 0;
+      let headerBytes = 0;
+      for (const entry of headers) {
+        // Strip everything up to and including the first "include/" segment.
+        const idx = entry.name.indexOf('include/');
+        const relative = entry.name.slice(idx + 'include/'.length);
+        if (!relative || relative.endsWith('/')) continue;
+        const dest = join(opts.headersOut, relative);
+        if (opts.dryRun) {
+          headerCount++;
+          headerBytes += entry.uncompSize;
+          continue;
+        }
+        const data = extractEntry(buf, entry);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, data);
+        headerCount++;
+        headerBytes += data.length;
+      }
+      const verb = opts.dryRun ? 'would write' : 'wrote';
+      process.stdout.write(`  headers      ${headerCount} file(s), ${human(headerBytes)}  ${verb} ${opts.headersOut}\n`);
+    }
   }
 
   if (opts.dryRun) {

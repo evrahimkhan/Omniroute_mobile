@@ -85,7 +85,7 @@ export function gatewayProgress(log: string): GatewayProgress | null {
       return { kind: 'verifying', label: 'Verifying the download…' };
     }
     if (match(/^checksum ok/)) return { kind: 'verifying', label: 'Download verified' };
-    if (match(/^warning: GATEWAY_PAYLOAD_SHA256 is not set/)) {
+    if (match(/^warning: no checksum available/)) {
       return { kind: 'verifying', label: 'Downloading without a checksum' };
     }
     found = match(/^extracting… ([\s\S]+)$/);

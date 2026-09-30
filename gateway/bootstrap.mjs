@@ -48,6 +48,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MARKER = 'install.json';
@@ -317,6 +318,116 @@ class ByteReader {
 /** ELF e_machine values, for the CPUs a payload might have been built for. */
 const ELF_MACHINES = { 0x03: 'x86', 0x28: 'arm', 0x3e: 'x86-64', 0xb7: 'arm64' };
 
+/**
+ * Markers of a libc Android does not have.
+ *
+ * Android's libc is Bionic, and it is not glibc or musl: a shared library linked
+ * against either is refused by the dynamic linker, however right its CPU is. The
+ * symbols below are what such a library always carries — `GLIBC_2.x` version
+ * references in a glibc binary, a `libc.musl-…` dependency in a musl one — and
+ * an Android-built library has neither.
+ */
+const LIBC_MARKERS = [
+  { marker: 'GLIBC_', flavour: 'glibc' },
+  { marker: 'libc.musl-', flavour: 'musl' },
+];
+
+/**
+ * Nothing above this is scanned. A full pass runs before every boot, and a
+ * phone's storage is slow: the libraries that matter are a few megabytes each.
+ */
+const LIBC_SCAN_FILE_LIMIT = 32 * 1024 * 1024;
+/** Total bytes the scan may read per boot, across all libraries. */
+const LIBC_SCAN_BUDGET = 256 * 1024 * 1024;
+/** Chunk size for the scan, with an overlap so a marker split across two reads is still found. */
+const LIBC_CHUNK_BYTES = 4 * 1024 * 1024;
+const LIBC_OVERLAP = 32;
+
+/**
+ * The libc an ELF file was linked against, when it is one Android cannot use.
+ *
+ * Scanned rather than parsed: the marker lives in the dynamic string table, and
+ * finding the table means walking section headers and their offsets — a great
+ * deal of code to read four bytes of it. A substring search over the file finds
+ * the same thing, and the file only has to be read once.
+ */
+function libcFlavour(file) {
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const chunk = Buffer.alloc(LIBC_CHUNK_BYTES + LIBC_OVERLAP);
+      let offset = 0;
+      for (;;) {
+        const read = readSync(fd, chunk, 0, LIBC_CHUNK_BYTES + LIBC_OVERLAP, offset);
+        if (read <= 0) return null;
+        // latin1 maps one byte to one character, so a marker can never be split
+        // by the decoding itself — only by the chunk boundary, which the overlap
+        // covers.
+        const text = chunk.toString('latin1', 0, read);
+        for (const { marker, flavour } of LIBC_MARKERS) {
+          if (text.includes(marker)) return flavour;
+        }
+        if (read <= LIBC_OVERLAP) return null;
+        offset += LIBC_CHUNK_BYTES;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The payload's natively-backed dependencies, resolved by name.
+ *
+ * `require.resolve` — not `require` — on purpose: it reads package.json and
+ * locates the entry file without loading anything, so this cannot dlopen a
+ * library and cannot be the thing that crashes the boot it is reporting on.
+ *
+ * What it buys is a sentence the app could otherwise only guess at. When a
+ * payload needs a native module the phone cannot load, the failure surfaces
+ * wherever that module was first required — often inside a background task
+ * nobody is watching — and the boot dies with no explanation. Naming them up
+ * front, before the boot, makes "which feature is degraded" a fact in the log.
+ */
+const NATIVE_MODULES = [
+  'sharp',
+  'better-sqlite3',
+  'onnxruntime-node',
+  'wreq-js',
+  'reqwest',
+  'tls-client-node',
+  '@ngrok/ngrok',
+  'keytar',
+];
+
+function probeNativeModules(appDir) {
+  // The path does not have to exist: createRequire only needs a file name to
+  // resolve from, and the payload's own directory is the right place to resolve
+  // from — node_modules inside it is what the payload loads.
+  const from = createRequire(path.join(appDir, 'server.js'));
+  const found = [];
+  const missing = [];
+  const esmOnly = [];
+  for (const name of NATIVE_MODULES) {
+    try {
+      from.resolve(name);
+      found.push(name);
+    } catch (err) {
+      // An ESM-only package cannot be resolved by a `require`, which is not the
+      // same thing as not being there — saying so avoids a false alarm.
+      if (err && err.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') esmOnly.push(name);
+      else missing.push(name);
+    }
+  }
+  log(
+    `native modules in the payload: ${found.length} of ${NATIVE_MODULES.length} resolvable` +
+      (missing.length ? `; not found: ${missing.join(', ')}` : '') +
+      (esmOnly.length ? `; import-only: ${esmOnly.join(', ')}` : '')
+  );
+}
+
 function machineName(code) {
   return ELF_MACHINES[code] ?? `0x${code.toString(16)}`;
 }
@@ -401,21 +512,50 @@ async function quarantineForeignLibraries(appDir, quarantineDir) {
     return;
   }
 
-  const mismatched = expected === null ? [] : binaries.filter((item) => item.machine !== null && item.machine !== expected);
-  const unreadable = binaries.filter((item) => item.machine === null).length;
-  if (!mismatched.length) {
-    // A library whose header could not be read is not a mismatch, but it is not
-    // evidence of a match either: say so rather than give a clean bill of health.
+  // Two reasons a library in the payload can never load on this phone:
+  //
+  //   - it was built for another CPU (the payload is assembled on an x86-64
+  //     runner), or
+  //   - it was built for a desktop libc — Android's is Bionic, and a glibc or
+  //     musl binary is refused outright, however right its CPU is.
+  //
+  // Both are decided here, before the boot, because both fail *during* it: the
+  // first is a crash with no output, the second an error thrown wherever the
+  // library happened to be required.
+  const wrongArch =
+    expected === null ? [] : binaries.filter((item) => item.machine !== null && item.machine !== expected);
+  const candidates = binaries.filter((item) => item.machine !== null && !wrongArch.includes(item));
+  let budget = LIBC_SCAN_BUDGET;
+  let unscanned = 0;
+  for (const item of candidates) {
+    const size = fileSize(item.file);
+    if (size > LIBC_SCAN_FILE_LIMIT || size > budget) {
+      unscanned += 1;
+      continue;
+    }
+    budget -= size;
+    item.libc = libcFlavour(item.file);
+  }
+  const wrongLibc = candidates.filter((item) => item.libc);
+  const unloadable = [...wrongArch, ...wrongLibc];
+
+  if (!unloadable.length) {
+    const unreadable = binaries.length - binaries.filter((item) => item.machine !== null).length;
+    // Unreadable and unscanned files are not a clean bill of health, so they are
+    // counted rather than folded into "all good".
     log(
-      `native libraries in the payload: ${binaries.length}, all built for ${machineName(expected) ?? process.arch}` +
-        (unreadable ? ` (${unreadable} unreadable)` : '')
+      `native libraries in the payload: ${binaries.length} checked, ${candidates.length} usable on this phone ` +
+        `(${process.arch}, Bionic)` +
+        (unreadable ? `, ${unreadable} unreadable` : '') +
+        (unscanned ? `, ${unscanned} too big to check` : '')
     );
     return;
   }
 
+  const reasonFor = (item) => (item.libc ? `desktop ${item.libc}` : machineName(item.machine));
   const moved = [];
   const failed = [];
-  for (const item of mismatched) {
+  for (const item of unloadable) {
     const relative = path.relative(appDir, item.file);
     const destination = path.join(quarantineDir, relative);
     try {
@@ -429,20 +569,24 @@ async function quarantineForeignLibraries(appDir, quarantineDir) {
 
   const named = moved
     .slice(0, 3)
-    .map((file) => `${file} (${machineName(mismatched.find((item) => path.relative(appDir, item.file) === file).machine)})`)
+    .map((file) => {
+      const item = unloadable.find((candidate) => path.relative(appDir, candidate.file) === file);
+      return `${file} (${reasonFor(item)})`;
+    })
     .join(', ');
   if (moved.length) {
     log(
-      `moved ${moved.length} of ${binaries.length} native libraries out of the payload — they are built for ` +
-        `another CPU than this phone (${process.arch}), and loading one is a crash with no output: ${named}`
+      `moved ${moved.length} of ${binaries.length} native libraries out of the payload — they cannot load on this ` +
+        `phone (${wrongArch.length} for another CPU, ${wrongLibc.length} for a desktop libc), and loading one is a ` +
+        `crash, or an error where nothing is watching: ${named}`
     );
   }
   if (failed.length) {
     // Left in place they are still a crash waiting to happen, so this is worth
     // saying loudly even though the move itself is best-effort.
     log(
-      `warning: could not move ${failed.length} native libraries built for another CPU: ${failed.join(', ')} — ` +
-        `a boot that touches one will crash with no output`
+      `warning: could not move ${failed.length} native libraries that cannot load on this phone: ` +
+        `${failed.join(', ')} — a boot that touches one will crash with no output`
     );
   }
 }
@@ -1014,6 +1158,13 @@ async function main() {
     await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'));
   } catch (err) {
     log(`warning: could not check the payload's native libraries: ${err.message}`);
+  }
+  // Which of the payload's natively-backed dependencies it can actually find,
+  // named before the boot that would otherwise fail around one of them.
+  try {
+    probeNativeModules(appDir);
+  } catch (err) {
+    log(`warning: could not check the payload's native modules: ${err.message}`);
   }
 
   bootTrace(`loading ${entry}`);

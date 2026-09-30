@@ -237,6 +237,15 @@ jobs:
         run: |
           set -uo pipefail
           dir="${{ steps.standalone.outputs.dir }}"
+          # Into the step summary as well as the log: the run's log is not
+          # readable from every environment, and this is what says which libraries
+          # a phone could never have loaded.
+          {
+            echo '### Native libraries dropped from the payload'
+            echo '```'
+            node scripts/prune-native-libs.mjs "$dir" --json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           node scripts/prune-native-libs.mjs "$dir"
           # Then prove it, so a payload that still carries one fails here — with a
           # list — instead of on someone's phone.

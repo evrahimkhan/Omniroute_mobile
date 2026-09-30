@@ -28,7 +28,7 @@
  *   --json          machine-readable report
  */
 
-import { lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readFileSync, readdirSync, readSync, unlinkSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 /** ELF e_machine values, for the CPUs a payload might have been built for. */
@@ -36,6 +36,63 @@ export const ELF_MACHINES = { 0x03: 'x86', 0x28: 'arm', 0x3e: 'x86-64', 0xb7: 'a
 
 /** Directories that never hold a library the payload loads. */
 const SKIP_DIRS = new Set(['.git', '.cache', '.next/cache']);
+
+/**
+ * Markers of a libc Android does not have.
+ *
+ * Android's libc is Bionic, and it is not glibc or musl: a shared library linked
+ * against either is refused by the dynamic linker, however right its CPU is.
+ * These are the strings such a library always carries — `GLIBC_2.x` version
+ * references, a `libc.musl-…` dependency — and an Android-built library has
+ * neither. Right CPU is necessary and not sufficient.
+ */
+export const LIBC_MARKERS = [
+  { marker: 'GLIBC_', flavour: 'glibc' },
+  { marker: 'libc.musl-', flavour: 'musl' },
+];
+
+const LIBC_CHUNK_BYTES = 4 * 1024 * 1024;
+const LIBC_OVERLAP = 32;
+
+/**
+ * The libc an ELF file was linked against, when it is one Android cannot use.
+ *
+ * Scanned rather than parsed: the marker lives in the dynamic string table, and
+ * reaching the table means walking section headers and their offsets — a great
+ * deal of code to read four bytes of it. A substring search finds the same
+ * thing, once, and the file only has to be read once.
+ */
+export function libcFlavour(file, { maxBytes = 64 * 1024 * 1024 } = {}) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const chunk = Buffer.alloc(LIBC_CHUNK_BYTES + LIBC_OVERLAP);
+    let offset = 0;
+    while (offset < maxBytes) {
+      const read = readSync(fd, chunk, 0, LIBC_CHUNK_BYTES + LIBC_OVERLAP, offset);
+      if (read <= 0) return null;
+      // latin1 maps one byte to one character, so a marker cannot be split by
+      // decoding — only by the chunk boundary, which the overlap covers.
+      const text = chunk.toString('latin1', 0, read);
+      for (const { marker, flavour } of LIBC_MARKERS) {
+        if (text.includes(marker)) return flavour;
+      }
+      if (read <= LIBC_OVERLAP) return null;
+      offset += LIBC_CHUNK_BYTES;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing useful to do about a failing close here.
+      }
+    }
+  }
+}
 
 export function machineName(code) {
   return ELF_MACHINES[code] ?? `0x${code.toString(16)}`;
@@ -98,16 +155,47 @@ export function findNativeLibraries(dir, { maxEntries = 400_000 } = {}) {
         continue;
       }
       if (!entry.name.endsWith('.node') && !entry.name.endsWith('.so')) continue;
-      found.push({ file: full, machine: elfMachine(full) });
+      const machine = elfMachine(full);
+      // Only worth reading for the libc when the CPU is already acceptable — a
+      // wrong-CPU library is deleted either way, and the read is not free.
+      const libc = machine === null ? null : libcFlavour(full);
+      found.push({ file: full, machine, stat: stats.size, libc });
     }
   }
   return { libraries: found, symlinks, visited };
 }
 
+/**
+ * `process.arch` spellings, mapped onto ELF's.
+ *
+ * The option takes an ELF machine name (`arm64`, `x86-64`) because that is what
+ * it is compared against, but `process.arch` is what a caller knows it has
+ * (`x64`, `ia32`) — and a mismatch between the two vocabularies is not a small
+ * thing here: an unrecognised name matches nothing, so *every* library in the
+ * payload looks foreign and all of them get deleted.
+ */
+export const ARCH_ALIASES = { x64: 'x86-64', ia32: 'x86', arm: 'arm', arm64: 'arm64' };
+
 /** The libraries whose CPU is known and is not `expected` (or `null`). */
 export function foreignLibraries(libraries, expected) {
   if (!expected) return [];
   return libraries.filter((item) => item.machine !== null && machineName(item.machine) !== expected);
+}
+
+/**
+ * Every library in the payload that a phone could not load, and why.
+ *
+ * Two independent reasons, and a payload only has to fail once: the wrong CPU
+ * (the payload is built on an x86-64 runner) or the wrong libc (a desktop glibc
+ * or musl binary, which Android's Bionic refuses). A wrong-CPU library is not
+ * worth reading for its libc — it is leaving either way.
+ */
+export function unloadableLibraries(libraries, expected) {
+  const wrongArch = foreignLibraries(libraries, expected);
+  const wrongLibc = libraries.filter(
+    (item) => item.libc && !wrongArch.includes(item) && (expected === null || machineName(item.machine) === expected)
+  );
+  return { wrongArch, wrongLibc, all: [...wrongArch, ...wrongLibc] };
 }
 
 function main(argv) {
@@ -116,33 +204,45 @@ function main(argv) {
   const check = args.includes('--check');
   const asJson = args.includes('--json');
   const archAt = args.indexOf('--arch');
-  const arch = archAt === -1 ? 'arm64' : args[archAt + 1];
+  const requested = archAt === -1 ? 'arm64' : args[archAt + 1];
+  const arch = ARCH_ALIASES[requested] ?? requested;
 
   if (!dir) {
     process.stderr.write('usage: prune-native-libs.mjs <dir> [--check] [--arch name] [--json]\n');
     process.exit(2);
   }
+  // An unknown name would classify every library as foreign and delete the lot,
+  // so it is refused rather than guessed at.
+  if (!Object.values(ELF_MACHINES).includes(arch)) {
+    process.stderr.write(
+      `✖ unknown --arch ${requested}: expected one of ${Object.values(ELF_MACHINES).join(', ')}\n`
+    );
+    process.exit(2);
+  }
 
   const { libraries, symlinks, visited } = findNativeLibraries(dir);
-  const foreign = foreignLibraries(libraries, arch);
+  const { wrongArch, wrongLibc, all } = unloadableLibraries(libraries, arch);
   const unreadable = libraries.length - libraries.filter((item) => item.machine !== null).length;
+  const reasonFor = (item) => (item.libc ? `desktop ${item.libc}` : machineName(item.machine));
 
   if (check) {
-    if (foreign.length) {
+    if (all.length) {
       process.stderr.write(
-        `✖ ${foreign.length} of ${libraries.length} native libraries are built for another CPU than ${arch}:\n`
+        `✖ ${all.length} of ${libraries.length} native libraries cannot load on a phone ` +
+          `(${wrongArch.length} for another CPU than ${arch}, ${wrongLibc.length} for a desktop libc):\n`
       );
-      for (const item of foreign.slice(0, 20)) {
-        process.stderr.write(`    ${relative(dir, item.file)} (${machineName(item.machine)})\n`);
+      for (const item of all.slice(0, 20)) {
+        process.stderr.write(`    ${relative(dir, item.file)} (${reasonFor(item)})\n`);
       }
       process.stderr.write(
-        '  A library for another CPU cannot load on the phone: the first require() that\n' +
-          '  touches it kills the process with no output. Prune them before packing.\n'
+        '  Android can load only libraries built for its own CPU and its own libc (Bionic):\n' +
+          '  the first require() of one of these is a crash, or an error where nothing is\n' +
+          '  watching. Prune them before packing.\n'
       );
       process.exit(1);
     }
     process.stdout.write(
-      `prune-native-libs: OK — ${libraries.length} native libraries, none foreign to ${arch}` +
+      `prune-native-libs: OK — ${libraries.length} native libraries, all loadable on ${arch}/Bionic` +
         (unreadable ? ` (${unreadable} unreadable)` : '') +
         `, ${symlinks.length} symlinks, ${visited} entries\n`
     );
@@ -150,7 +250,7 @@ function main(argv) {
   }
 
   const removed = [];
-  for (const item of foreign) {
+  for (const item of all) {
     try {
       unlinkSync(item.file);
       removed.push(item);
@@ -166,7 +266,13 @@ function main(argv) {
         {
           visited,
           libraries: libraries.length,
-          removed: removed.map((item) => ({ file: relative(dir, item.file), machine: machineName(item.machine) })),
+          removed: removed.map((item) => ({
+            file: relative(dir, item.file),
+            machine: machineName(item.machine),
+            libc: item.libc ?? null,
+          })),
+          wrongArch: wrongArch.length,
+          wrongLibc: wrongLibc.length,
           unreadable,
           symlinks: symlinks.length,
         },
@@ -178,14 +284,17 @@ function main(argv) {
   }
 
   if (!removed.length) {
-    process.stdout.write(`prune-native-libs: nothing to remove (${libraries.length} libraries, all for ${arch})\n`);
+    process.stdout.write(
+      `prune-native-libs: nothing to remove (${libraries.length} libraries, all loadable on ${arch}/Bionic)\n`
+    );
     return;
   }
   process.stdout.write(
-    `prune-native-libs: removed ${removed.length} of ${libraries.length} native libraries built for another CPU:\n`
+    `prune-native-libs: removed ${removed.length} of ${libraries.length} native libraries that cannot load on ` +
+      `a phone (${wrongArch.length} for another CPU than ${arch}, ${wrongLibc.length} for a desktop libc):\n`
   );
   for (const item of removed.slice(0, 20)) {
-    process.stdout.write(`    ${relative(dir, item.file)} (${machineName(item.machine)})\n`);
+    process.stdout.write(`    ${relative(dir, item.file)} (${reasonFor(item)})\n`);
   }
   if (removed.length > 20) process.stdout.write(`    … and ${removed.length - 20} more\n`);
   process.stdout.write(

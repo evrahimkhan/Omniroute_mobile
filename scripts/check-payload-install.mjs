@@ -178,22 +178,27 @@ async function main() {
    * and an e_machine value. Written by hand because the point is what the scanner
    * does with a *foreign* CPU, and no real arm64 library exists on this runner.
    */
-  const writeElf = (file, machine) => {
+  const writeElf = (file, machine, marker = '') => {
     const header = Buffer.alloc(20);
     header.write('\x7fELF', 0, 'binary');
     header[4] = 2; // 64-bit
     header[5] = 1; // little-endian
     header.writeUInt16LE(2, 16); // e_type = ET_EXEC
     header.writeUInt16LE(machine, 18); // e_machine
-    writeFileSync(file, header);
+    writeFileSync(file, marker ? Buffer.concat([header, Buffer.from(marker, 'latin1')]) : header);
   };
-  // One for x86-64 (0x3e) and one for arm64 (0xb7). The runner is x86-64, so the
-  // arm64 one is the foreign library here; the assertion below is written against
-  // the count, not against a hardcoded CPU name.
+  // Three libraries, written relative to whatever CPU runs this test, so the
+  // assertions hold on a phone, an x86-64 runner and an arm64 laptop alike:
+  // one for this CPU, one for the other CPU, and one for this CPU but linked
+  // against a desktop libc — which Android's Bionic refuses, so it has to go
+  // too, and for a different reason.
+  const hostMachine = process.arch === 'arm64' ? 0xb7 : 0x3e;
+  const otherMachine = hostMachine === 0xb7 ? 0x3e : 0xb7;
   const sharpDir = join(standalone, 'node_modules', 'sharp', 'build', 'Release');
   mkdirSync(sharpDir, { recursive: true });
-  writeElf(join(sharpDir, 'sharp.node'), 0x3e);
-  writeElf(join(sharpDir, 'libvips.so'), 0xb7);
+  writeElf(join(sharpDir, 'sharp.node'), otherMachine);
+  writeElf(join(sharpDir, 'libvips.so'), hostMachine);
+  writeElf(join(sharpDir, 'libvips-desktop.so'), hostMachine, '\x00GLIBC_2.34\x00');
   writeFileSync(join(standalone, 'server.js'), fixtureServer('STANDALONE'));
   symlinkSync('server.js', join(standalone, 'entry-link.js'));
 
@@ -348,30 +353,36 @@ async function main() {
   check('standalone payload: it is started', first.output.includes('starting server.js on 127.0.0.1:'));
   check(
     'the payload native libraries are inspected before the boot',
-    /native libraries in the payload: \d+/.test(first.output) ||
-      /moved \d+ of \d+ native libraries/.test(first.output)
+    /native libraries in the payload: \d+/.test(first.output) || /moved \d+ of \d+ native/.test(first.output)
   );
-  // A foreign library cannot load on a phone, and loading one kills the process
-  // with no output at all — so the bootstrap moves it out of the tree rather
-  // than reporting it and booting into the crash anyway.
+  // A library that cannot load cannot be left in the tree: the first require()
+  // that touches it is a crash with no output, or an error thrown wherever the
+  // require happened to be. So both reasons are removed before the boot.
   check(
-    'a library built for another CPU is moved out of the payload, and named',
-    /moved 1 of 2 native libraries out of the payload/.test(first.output) &&
-      (first.output.includes('libvips.so') || first.output.includes('sharp.node'))
-  );
-  check(
-    'the moved library is really gone from the tree the payload requires from',
-    !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips.so')) ||
-      !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node'))
+    'libraries that cannot load on a phone are moved out of the payload',
+    /moved 2 of 3 native libraries out of the payload/.test(first.output) &&
+      /1 for another CPU, 1 for a desktop libc/.test(first.output)
   );
   check(
-    'and the one built for the machine running this test stayed',
-    existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips.so')) ||
-      existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node'))
+    'and the reason is named per file, so the next fix is obvious',
+    /desktop glibc/.test(first.output) && /sharp\.node \(/.test(first.output)
+  );
+  check(
+    'the libraries that cannot load are gone from the tree the payload requires from',
+    !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node')) &&
+      !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips-desktop.so'))
+  );
+  check(
+    'and the one built for this CPU and libc stayed',
+    existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips.so'))
   );
   check(
     'the quarantine is outside the tree the payload loads from',
     existsSync(join(install1, 'wrong-arch'))
+  );
+  check(
+    'the payload\'s natively-backed dependencies are named before the boot',
+    /native modules in the payload: \d+ of \d+ resolvable/.test(first.output)
   );
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
   check('standalone payload: the checksum manifest was fetched and matched', first.output.includes('checksum ok'));
@@ -573,7 +584,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 46;
+  const total = 48;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

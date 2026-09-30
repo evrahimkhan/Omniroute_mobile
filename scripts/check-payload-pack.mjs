@@ -257,32 +257,62 @@ async function main() {
     // pruner deletes exactly those, and `--check` refuses a payload that still
     // has one — so this covers both halves.
     const natives = join(work, 'natives');
-    const elf = (file, machine) => {
+    const elf = (file, machine, marker = '') => {
       const header = Buffer.alloc(20);
       header.write('\x7fELF', 0, 'binary');
       header[4] = 2;
       header[5] = 1;
       header.writeUInt16LE(2, 16);
       header.writeUInt16LE(machine, 18);
-      writeFileSync(file, header);
+      writeFileSync(file, marker ? Buffer.concat([header, Buffer.from(marker, 'latin1')]) : header);
     };
-    mkdirSync(join(natives, 'node_modules', 'pkg'), { recursive: true });
-    elf(join(natives, 'node_modules', 'pkg', 'right.node'), 0xb7);
-    elf(join(natives, 'node_modules', 'pkg', 'wrong.node'), 0x3e);
-    elf(join(natives, 'node_modules', 'pkg', 'wrong.so'), 0x3e);
-    writeFileSync(join(natives, 'node_modules', 'pkg', 'notelf.so'), 'not an ELF file');
+    const pkgDir = join(natives, 'node_modules', 'pkg');
+    mkdirSync(pkgDir, { recursive: true });
+    const write = (name, ...args) => elf(join(pkgDir, name), ...args);
+    write('right.node', 0xb7);
+    write('wrong.node', 0x3e);
+    write('wrong.so', 0x3e);
+    // Right CPU, wrong libc: what Android refuses next, once the CPU is right.
+    // A glibc binary carries GLIBC_2.x version references; a musl one names its
+    // musl libc in DT_NEEDED. Both are unloadable on Bionic.
+    write('glibc.node', 0xb7, '\x00GLIBC_2.34\x00');
+    write('musl.node', 0xb7, '\x00libc.musl-aarch64.so.1\x00');
+    writeFileSync(join(pkgDir, 'notelf.so'), 'not an ELF file');
 
     const pruneOutput = execFileSync(
       process.execPath,
       [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'arm64'],
       { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
     );
-    check('the pruner removes libraries built for another CPU', /removed 2 of 4/.test(pruneOutput));
-    check('the pruner names them', /wrong\.node \(x86-64\)/.test(pruneOutput));
     check(
-      'and leaves the right-CPU and unreadable files alone',
-      existsSync(join(natives, 'node_modules', 'pkg', 'right.node')) &&
-        existsSync(join(natives, 'node_modules', 'pkg', 'notelf.so'))
+      'the pruner removes libraries that cannot load on a phone',
+      /removed 4 of 6 native libraries that cannot load on a phone \(2 for another CPU than arm64, 2 for a desktop libc\)/.test(
+        pruneOutput
+      )
+    );
+    check('the pruner names the wrong CPU', /wrong\.node \(x86-64\)/.test(pruneOutput));
+    check(
+      'and names the desktop libc, so the reason is never a guess',
+      /glibc\.node \(desktop glibc\)/.test(pruneOutput) && /musl\.node \(desktop musl\)/.test(pruneOutput)
+    );
+    check(
+      'and leaves the right-CPU, right-libc and unreadable files alone',
+      existsSync(join(pkgDir, 'right.node')) && existsSync(join(pkgDir, 'notelf.so'))
+    );
+    check(
+      'a mistyped --arch is refused rather than deleting everything',
+      (() => {
+        try {
+          execFileSync(
+            process.execPath,
+            [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'armv7', '--check'],
+            { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+          );
+          return false;
+        } catch (err) {
+          return String(err.stderr ?? '').includes('unknown --arch');
+        }
+      })()
     );
     check(
       'a pruned payload passes the check',
@@ -290,7 +320,7 @@ async function main() {
         process.execPath,
         [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'arm64', '--check'],
         { cwd: ROOT, encoding: 'utf8' }
-      ).includes('none foreign to arm64')
+      ).includes('all loadable on arm64/Bionic')
     );
 
     // And the gate has to fail when one is left behind, or it guards nothing.

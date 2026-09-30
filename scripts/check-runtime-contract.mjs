@@ -484,13 +484,40 @@ check(
 );
 
 check(
-  'a native library built for another CPU is moved out of the payload, not just reported',
+  'a native library that cannot load is moved out of the payload, not just reported',
   sources.bootstrap.includes('async function quarantineForeignLibraries(') &&
     sources.bootstrap.includes('function elfMachine(') &&
     sources.bootstrap.includes("path.join(gatewayDir, 'wrong-arch')") &&
     sources.bootstrap.indexOf('await quarantineForeignLibraries(appDir') <
       sources.bootstrap.lastIndexOf('bootTrace(`loading ${entry}`)'),
   'the payload is built on an x86-64 runner; the library travels to an arm64 phone and the first require() is a SIGSEGV'
+);
+
+check(
+  'both reasons a library can never load on a phone are handled',
+  sources.bootstrap.includes("const LIBC_MARKERS = [") &&
+    sources.bootstrap.includes("marker: 'GLIBC_'") &&
+    sources.bootstrap.includes("marker: 'libc.musl-'") &&
+    sources.bootstrap.includes('const wrongLibc = candidates.filter((item) => item.libc)') &&
+    sources.bootstrap.includes('function libcFlavour('),
+  'Android uses Bionic: a glibc or musl binary is refused however right its CPU is'
+);
+
+check(
+  'the scan of a big payload stays bounded',
+  sources.bootstrap.includes('LIBC_SCAN_FILE_LIMIT') &&
+    sources.bootstrap.includes('LIBC_SCAN_BUDGET') &&
+    sources.bootstrap.includes('too big to check'),
+  'this runs before every boot, on a phone, over tens of thousands of files'
+);
+
+check(
+  'the payload\'s native modules are named before the boot that needs them',
+  sources.bootstrap.includes('function probeNativeModules(') &&
+    sources.bootstrap.includes("import { createRequire } from 'node:module'") &&
+    sources.bootstrap.includes('from.resolve(name)') &&
+    sources.bootstrap.includes('ERR_PACKAGE_PATH_NOT_EXPORTED'),
+  'resolving locates the file without loading it, so the check cannot be the crash it reports on'
 );
 
 check(

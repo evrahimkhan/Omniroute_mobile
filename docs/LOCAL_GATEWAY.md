@@ -973,6 +973,51 @@ that way when the crash handler did not claim it, which is exactly what a fault
 inside a native addon looks like. The tombstone was available the whole time; the
 condition now includes both reasons.
 
+### 5q. The second way a library cannot load: the wrong libc
+
+Pruning the wrong CPU is necessary and not sufficient. Android's libc is
+**Bionic**, and it is neither glibc nor musl: a shared library linked against
+either is refused by the dynamic linker *however right its CPU is*. That is not a
+theoretical risk here — npm's per-platform native packages are published per
+*libc* as well as per CPU (`@img/sharp-linux-arm64` is glibc, `…-linux-arm64-musl`
+is musl), and `onnxruntime-node` and `better-sqlite3` ship Node-API prebuilds for
+a matrix of desktop platforms. A payload built on an x86-64 runner can therefore
+contain an arm64 library that still cannot load on the phone.
+
+So both ends check for both reasons. A library is unusable when
+`e_machine` is not the phone's CPU **or** its bytes name a libc Android does not
+have — `GLIBC_2.x` version references, or a `libc.musl-…` dependency. The second
+is a substring scan of the file (the alternative is walking section headers to
+read the same four bytes), in 4 MB chunks with a 32-byte overlap so a marker
+split across a read is still found.
+
+The payload build prunes both classes before packing and `--check` fails the
+build if either survives; the device moves both classes into `wrong-arch/`
+before each boot, and says which is which:
+
+```
+[gateway] moved 32 of 63 native libraries out of the payload — they cannot load on
+          this phone (29 for another CPU, 3 for a desktop libc), and loading one is a
+          crash, or an error where nothing is watching: …
+```
+
+On a phone that scan has to stay cheap, because it runs before every boot over
+tens of thousands of files: nothing above 32 MB is read, the whole pass has a
+256 MB budget, and how much was skipped is reported rather than hidden.
+
+**And the modules that need those libraries are named before the boot.** Proving
+which feature will be degraded used to require watching a boot fail around one:
+
+```
+[gateway] native modules in the payload: 5 of 8 resolvable; not found: sharp, onnxruntime-node; import-only: wreq-js
+```
+
+`require.resolve` — never `require` — is what makes this safe: it reads
+`package.json` and locates the entry file without loading anything, so the check
+cannot dlopen a library and cannot itself be the crash it is reporting on. A
+package that is import-only is reported separately from one that is missing,
+because the two mean different things.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

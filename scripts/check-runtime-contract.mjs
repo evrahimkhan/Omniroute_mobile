@@ -51,6 +51,50 @@ const sources = Object.fromEntries(
   Object.entries(FILES).map(([key, path]) => [key, readFileSync(path, 'utf8')])
 );
 
+/**
+ * Lines that leave a string literal open.
+ *
+ * Kotlin has no multi-line strings here (no `"""` in these files), so a literal
+ * left open is a syntax error. The compiler reports it as "Unexpected tokens" on
+ * a line that looks fine, 14 minutes into an APK build — this costs no build at
+ * all, and App CI runs the check in 30 seconds. It caught a real one: a patch
+ * that appended `joinToString("\n")"`, where the trailing quote opened a string
+ * that never closed.
+ */
+function unterminatedStrings(source) {
+  const problems = [];
+  source.split('\n').forEach((line, index) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return;
+    let inString = false;
+    let inComment = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      if (inComment) break;
+      if (inString) {
+        if (char === '\\') {
+          i += 1;
+          continue;
+        }
+        if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '/' && line[i + 1] === '/') {
+        inComment = true;
+        break;
+      }
+      if (char === '"') inString = true;
+    }
+    if (inString) problems.push(`${index + 1}: ${trimmed.slice(0, 70)}`);
+  });
+  return problems;
+}
+
+const kotlinFiles = ['index', 'web', 'module', 'host', 'service', 'prefs'];
+const unbalanced = kotlinFiles
+  .flatMap((key) => unterminatedStrings(sources[key]).map((problem) => `${key}.kt ${problem}`))
+  .filter((problem) => !problem.startsWith('web.kt') && !problem.startsWith('index.kt'));
+
 const failures = [];
 const check = (label, ok, detail = '') => {
   process.stdout.write(`  ${ok ? '✓' : '✖'} ${label}${ok || !detail ? '' : ` — ${detail}`}\n`);
@@ -415,6 +459,12 @@ check(
     sources.host.includes('.coerceAtLeast(MIN_HEAP_CAP_MB)') &&
     sources.host.includes('runCatching { Runtime.getRuntime().maxMemory()'),
   'a failed read or a nonsense number must not turn into a boot that cannot fit'
+);
+
+check(
+  'no Kotlin source leaves a string literal open',
+  unbalanced.length === 0,
+  unbalanced.slice(0, 3).join(' | ')
 );
 
 check(

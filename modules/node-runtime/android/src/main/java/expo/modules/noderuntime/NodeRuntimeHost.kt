@@ -342,7 +342,7 @@ internal object NodeRuntimeHost {
 
     return listOf("the last abnormal exit was $whenText: $why ($where)$description", memory, trace)
       .filter { it.isNotEmpty() }
-      .joinToString("\n")"
+      .joinToString("\n")
   }
 
   fun gatewayDir(context: Context): File = File(context.filesDir, DIR_NAME)

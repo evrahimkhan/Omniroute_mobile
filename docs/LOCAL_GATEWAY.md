@@ -910,6 +910,69 @@ SIGSEGV, not a catchable error. The default is now 32 MB, which costs address
 space and nothing else on a 64-bit process. `runtime:contract` asserts the two
 declarations of that default agree.
 
+### 5p. The cause: the payload shipped libraries for the wrong CPU
+
+The boot record and the arch scan together produced the answer, and the device
+proved it:
+
+```
+[gateway] warning: 29 of 63 native libraries in the payload are built for another
+          CPU than this phone (arm64): src/mint/proxy/native/build/Release/transform.node
+          (x86-64), node_modules/@img/sharp-linux-x64/lib/sharp-linux-x64.node (x86-64),
+          node_modules/@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.17.6 (x86-64) …
+```
+
+**29 of the payload's 63 native libraries were x86-64, and the phone is arm64.**
+That is the SIGSEGV, and it is not a subtle bug:
+
+- the payload is assembled on a GitHub runner — x86-64 Linux — by `npm ci` plus a
+  Next.js `standalone` build;
+- `npm ci` resolves npm's *optional per-platform* native packages for the machine
+  that runs it, so `@img/sharp-*`, `@wreq-js/binding-*` and anything node-gyp
+  compiled in place are all built for Linux x86-64;
+- nothing in that pipeline knows the target is an arm64 phone, and its own boot
+  check cannot notice, because the payload boots perfectly *on the runner*, where
+  an x86-64 binary is exactly right.
+
+Loading such a library is `SIGSEGV` inside the app's process (node runs
+in-process, by design), which is why the app disappeared rather than reporting
+anything: node died before it could.
+
+Two fixes, one for each end of the pipeline.
+
+**In the payload build (the cause).** A new step between locating the standalone
+tree and packing it runs `scripts/prune-native-libs.mjs`, which deletes every
+`.node`/`.so` whose ELF `e_machine` is not arm64, prints what it removed, and then
+re-runs itself with `--check` — so a payload that still carries a foreign library
+*fails the build*, naming the file, instead of reaching a phone. What replaces a
+removed library is whatever the payload already does without it: upstream treats
+most of these as optional and warns rather than fails, and the alternative is a
+plain `Cannot find module`, which prints and which the app can show. The rules
+matter more than the tool: a library for another CPU can never load on a phone,
+so deleting it cannot lose a feature that worked.
+
+**On the device (surviving one).** The bootstrap no longer only *reports* foreign
+libraries: it moves them out of the install tree into `wrong-arch/` before every
+boot, and says so once:
+
+```
+[gateway] moved 29 of 63 native libraries out of the payload — they are built for
+          another CPU than this phone (arm64), and loading one is a crash with no
+          output: …
+```
+
+That matters for the payload already installed on a phone: the fix in the
+pipeline only helps the *next* download. Moving the files converts a segfault
+into a normal module error, and it is also what makes the second fix visible
+rather than theoretical — the first boot after this change either gets further or
+says which module it now cannot find.
+
+**And the dump is read for a signalled death too.** The device's crash arrived as
+`REASON_SIGNALED`, not `REASON_CRASH_NATIVE` — Android classifies a fatal signal
+that way when the crash handler did not claim it, which is exactly what a fault
+inside a native addon looks like. The tombstone was available the whole time; the
+condition now includes both reasons.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

@@ -349,12 +349,29 @@ async function main() {
   check(
     'the payload native libraries are inspected before the boot',
     /native libraries in the payload: \d+/.test(first.output) ||
-      /warning: \d+ of \d+ native libraries/.test(first.output)
+      /moved \d+ of \d+ native libraries/.test(first.output)
+  );
+  // A foreign library cannot load on a phone, and loading one kills the process
+  // with no output at all — so the bootstrap moves it out of the tree rather
+  // than reporting it and booting into the crash anyway.
+  check(
+    'a library built for another CPU is moved out of the payload, and named',
+    /moved 1 of 2 native libraries out of the payload/.test(first.output) &&
+      (first.output.includes('libvips.so') || first.output.includes('sharp.node'))
   );
   check(
-    'a library built for another CPU is named, because loading it is a silent native crash',
-    /warning: 1 of 2 native libraries in the payload are built for another CPU/.test(first.output) &&
-      (first.output.includes('libvips.so') || first.output.includes('sharp.node'))
+    'the moved library is really gone from the tree the payload requires from',
+    !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips.so')) ||
+      !existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node'))
+  );
+  check(
+    'and the one built for the machine running this test stayed',
+    existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'libvips.so')) ||
+      existsSync(join(install1, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node'))
+  );
+  check(
+    'the quarantine is outside the tree the payload loads from',
+    existsSync(join(install1, 'wrong-arch'))
   );
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
   check('standalone payload: the checksum manifest was fetched and matched', first.output.includes('checksum ok'));
@@ -556,7 +573,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 43;
+  const total = 46;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

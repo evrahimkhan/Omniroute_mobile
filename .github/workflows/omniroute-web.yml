@@ -43,6 +43,9 @@ on:
       - .github/workflows/omniroute-web.yml
       - scripts/pack-payload.mjs
       - scripts/check-payload-pack.mjs
+      # The prune step decides which native libraries reach a phone: a change
+      # there changes the published payload, so it republishes like the packer.
+      - scripts/prune-native-libs.mjs
   workflow_dispatch:
     inputs:
       ref:
@@ -219,6 +222,25 @@ jobs:
           links=$(find "$chosen" -type l 2>/dev/null | wc -l)
           echo "symlinks in the tree: $links"
           echo "dir=$chosen" >> "$GITHUB_OUTPUT"
+
+      # A native library for the wrong CPU cannot load on a phone, ever: the first
+      # require() that touches it kills the process with a SIGSEGV and writes
+      # nothing at all. This is not hypothetical — measured on a real device, 29 of
+      # the published payload's 63 libraries were x86-64, because the whole tree is
+      # assembled here, on an x86-64 runner, and `npm ci` resolves npm's "optional"
+      # native packages (sharp, wreq-js, node-gyp builds) for the machine that ran
+      # it. So the payload ships none of them: what replaces one is the payload's
+      # own JavaScript fallback, or a plain "Cannot find module" that prints.
+      - name: Drop native libraries built for another CPU
+        id: natives
+        if: ${{ github.event_name == 'push' || inputs.payload }}
+        run: |
+          set -uo pipefail
+          dir="${{ steps.standalone.outputs.dir }}"
+          node scripts/prune-native-libs.mjs "$dir"
+          # Then prove it, so a payload that still carries one fails here — with a
+          # list — instead of on someone's phone.
+          node scripts/prune-native-libs.mjs "$dir" --check
 
       - name: Pack the gateway payload
         id: pack

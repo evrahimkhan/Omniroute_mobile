@@ -352,15 +352,26 @@ function elfMachine(file) {
 }
 
 /**
- * Native libraries in the payload, and which of them are for another CPU.
+ * Move native libraries built for another CPU out of the payload.
  *
- * A report rather than a refusal, on purpose: a wrong-arch library that nothing
- * loads is harmless, and this runs before every boot — including one that would
- * otherwise have worked. What it buys is that the warning is in the log *before*
- * the crash it predicts, so a crash report says which file to suspect instead of
- * leaving nothing at all.
+ * A library for the wrong CPU cannot load on this phone: the first `require()`
+ * that touches it kills the process with a SIGSEGV and writes nothing at all —
+ * measured on a real device, where 29 of the payload's 63 libraries were x86-64
+ * because the payload is assembled on an x86-64 runner. Reporting that is not
+ * enough: the crash still happens, one step later, with no way to tell which
+ * file did it.
+ *
+ * So they are moved aside, into `wrong-arch/` beside the install. What replaces
+ * them is whatever the payload already does without them — upstream treats most
+ * of these as optional and warns — or a plain `Cannot find module`, which prints
+ * and which the app can show. Either is a gateway that says what is missing
+ * instead of an app that disappears.
+ *
+ * Deliberately not a refusal: a foreign library that nothing loads is harmless,
+ * and this runs before every boot. It leaves the tree alone once the files are
+ * gone, so the common case costs one line in the log.
  */
-function inspectNativeLibraries(appDir) {
+async function quarantineForeignLibraries(appDir, quarantineDir) {
   const expected = process.arch === 'arm64' ? 0xb7 : process.arch === 'x64' ? 0x3e : null;
   const binaries = [];
   const queue = [appDir];
@@ -392,25 +403,48 @@ function inspectNativeLibraries(appDir) {
 
   const mismatched = expected === null ? [] : binaries.filter((item) => item.machine !== null && item.machine !== expected);
   const unreadable = binaries.filter((item) => item.machine === null).length;
-  if (mismatched.length) {
-    const named = mismatched
-      .slice(0, 3)
-      .map((item) => `${path.relative(appDir, item.file)} (${machineName(item.machine)})`)
-      .join(', ');
+  if (!mismatched.length) {
+    // A library whose header could not be read is not a mismatch, but it is not
+    // evidence of a match either: say so rather than give a clean bill of health.
     log(
-      `warning: ${mismatched.length} of ${binaries.length} native libraries in the payload are built for ` +
-        `another CPU than this phone (${process.arch}): ${named} — loading one of those is a native crash ` +
-        `with no output at all`
+      `native libraries in the payload: ${binaries.length}, all built for ${machineName(expected) ?? process.arch}` +
+        (unreadable ? ` (${unreadable} unreadable)` : '')
     );
     return;
   }
 
-  // A library whose header could not be read is not a mismatch, but it is not
-  // evidence of a match either: say so rather than give a clean bill of health.
-  log(
-    `native libraries in the payload: ${binaries.length}, all built for ${machineName(expected) ?? process.arch}` +
-      (unreadable ? ` (${unreadable} unreadable)` : '')
-  );
+  const moved = [];
+  const failed = [];
+  for (const item of mismatched) {
+    const relative = path.relative(appDir, item.file);
+    const destination = path.join(quarantineDir, relative);
+    try {
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.rename(item.file, destination);
+      moved.push(relative);
+    } catch (err) {
+      failed.push(`${relative} (${err.message})`);
+    }
+  }
+
+  const named = moved
+    .slice(0, 3)
+    .map((file) => `${file} (${machineName(mismatched.find((item) => path.relative(appDir, item.file) === file).machine)})`)
+    .join(', ');
+  if (moved.length) {
+    log(
+      `moved ${moved.length} of ${binaries.length} native libraries out of the payload — they are built for ` +
+        `another CPU than this phone (${process.arch}), and loading one is a crash with no output: ${named}`
+    );
+  }
+  if (failed.length) {
+    // Left in place they are still a crash waiting to happen, so this is worth
+    // saying loudly even though the move itself is best-effort.
+    log(
+      `warning: could not move ${failed.length} native libraries built for another CPU: ${failed.join(', ')} — ` +
+        `a boot that touches one will crash with no output`
+    );
+  }
 }
 
 /** Parse the numeric fields of a tar header (they are NUL/space padded octal). */
@@ -974,12 +1008,12 @@ async function main() {
   log(`starting ${entry} on ${process.env.HOSTNAME}:${process.env.PORT}`);
   // Written before the import, because this is the step the app has been seen
   // to die in — and a process that dies here prints nothing at all.
-  // Before the boot, because this is the last moment at which a wrong-arch
-  // library can be reported *by name* rather than inferred from a disappearance.
+  // Before the boot, because a wrong-arch library is a crash that happens *during*
+  // the boot, and moving it out of the way is the only thing that prevents it.
   try {
-    inspectNativeLibraries(appDir);
+    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'));
   } catch (err) {
-    log(`warning: could not inspect the payload's native libraries: ${err.message}`);
+    log(`warning: could not check the payload's native libraries: ${err.message}`);
   }
 
   bootTrace(`loading ${entry}`);

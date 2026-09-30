@@ -248,6 +248,67 @@ async function main() {
       traversalRefused = String(err?.message ?? '').includes('outside the install dir');
     }
     check('refuses an entry that escapes the install dir', traversalRefused);
+
+    // 8. The pruner that keeps a wrong-CPU library out of the published payload.
+    //
+    // The payload is assembled on an x86-64 runner, so `npm ci` resolves native
+    // packages for Linux x86-64 and they travel to an arm64 phone, where the
+    // first require() that touches one is a SIGSEGV with no output at all. The
+    // pruner deletes exactly those, and `--check` refuses a payload that still
+    // has one — so this covers both halves.
+    const natives = join(work, 'natives');
+    const elf = (file, machine) => {
+      const header = Buffer.alloc(20);
+      header.write('\x7fELF', 0, 'binary');
+      header[4] = 2;
+      header[5] = 1;
+      header.writeUInt16LE(2, 16);
+      header.writeUInt16LE(machine, 18);
+      writeFileSync(file, header);
+    };
+    mkdirSync(join(natives, 'node_modules', 'pkg'), { recursive: true });
+    elf(join(natives, 'node_modules', 'pkg', 'right.node'), 0xb7);
+    elf(join(natives, 'node_modules', 'pkg', 'wrong.node'), 0x3e);
+    elf(join(natives, 'node_modules', 'pkg', 'wrong.so'), 0x3e);
+    writeFileSync(join(natives, 'node_modules', 'pkg', 'notelf.so'), 'not an ELF file');
+
+    const pruneOutput = execFileSync(
+      process.execPath,
+      [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'arm64'],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    check('the pruner removes libraries built for another CPU', /removed 2 of 4/.test(pruneOutput));
+    check('the pruner names them', /wrong\.node \(x86-64\)/.test(pruneOutput));
+    check(
+      'and leaves the right-CPU and unreadable files alone',
+      existsSync(join(natives, 'node_modules', 'pkg', 'right.node')) &&
+        existsSync(join(natives, 'node_modules', 'pkg', 'notelf.so'))
+    );
+    check(
+      'a pruned payload passes the check',
+      execFileSync(
+        process.execPath,
+        [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'arm64', '--check'],
+        { cwd: ROOT, encoding: 'utf8' }
+      ).includes('none foreign to arm64')
+    );
+
+    // And the gate has to fail when one is left behind, or it guards nothing.
+    elf(join(natives, 'node_modules', 'pkg', 'left-behind.node'), 0x3e);
+    let gateFailed = false;
+    let gateOutput = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [join(ROOT, 'scripts', 'prune-native-libs.mjs'), natives, '--arch', 'arm64', '--check'],
+        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    } catch (err) {
+      gateFailed = true;
+      gateOutput = String(err.stderr ?? '');
+    }
+    check('the check refuses a payload that still carries a foreign library', gateFailed);
+    check('and says which file, so the fix is obvious', gateOutput.includes('left-behind.node'));
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

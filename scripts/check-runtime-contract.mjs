@@ -44,6 +44,7 @@ const FILES = {
   installer: join(ROOT, 'lib', 'gatewayInstaller.ts'),
   log: join(ROOT, 'lib', 'gatewayLog.ts'),
   card: join(ROOT, 'components', 'LocalGatewayCard.tsx'),
+  webWorkflow: join(ROOT, '.github', 'workflows', 'omniroute-web.yml'),
   bootstrap: join(ROOT, 'gateway', 'bootstrap.mjs'),
 };
 
@@ -483,13 +484,28 @@ check(
 );
 
 check(
-  'the payload is checked for native libraries built for another CPU',
-  sources.bootstrap.includes('function inspectNativeLibraries(') &&
+  'a native library built for another CPU is moved out of the payload, not just reported',
+  sources.bootstrap.includes('async function quarantineForeignLibraries(') &&
     sources.bootstrap.includes('function elfMachine(') &&
-    sources.bootstrap.includes('are built for ') &&
-    sources.bootstrap.indexOf('inspectNativeLibraries(appDir)') <
+    sources.bootstrap.includes("path.join(gatewayDir, 'wrong-arch')") &&
+    sources.bootstrap.indexOf('await quarantineForeignLibraries(appDir') <
       sources.bootstrap.lastIndexOf('bootTrace(`loading ${entry}`)'),
-  'the payload is built on an x86-64 runner; a prebuilt native module that travels to an arm64 phone crashes it'
+  'the payload is built on an x86-64 runner; the library travels to an arm64 phone and the first require() is a SIGSEGV'
+);
+
+check(
+  'the payload build prunes them before packing, and refuses to publish one',
+  sources.webWorkflow.includes('scripts/prune-native-libs.mjs "$dir"') &&
+    sources.webWorkflow.includes('scripts/prune-native-libs.mjs "$dir" --check') &&
+    sources.webWorkflow.indexOf('prune-native-libs.mjs "$dir"') <
+      sources.webWorkflow.lastIndexOf('name: Pack the gateway payload'),
+  'the crash is created by the build machine, so it has to be fixed there, not only survived on the phone'
+);
+
+check(
+  'the crash dump is read for a signalled death too, not only a native-crash verdict',
+  sources.host.includes('ApplicationExitInfo.REASON_CRASH_NATIVE, ApplicationExitInfo.REASON_SIGNALED -> crashTrace(info)'),
+  'Android reports a segfault in a native addon as "signaled" whenever the crash handler did not claim it'
 );
 
 check(

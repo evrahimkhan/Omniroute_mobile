@@ -338,7 +338,14 @@ internal object NodeRuntimeHost {
     } else {
       ""
     }
-    val trace = if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) crashTrace(info) else ""
+    // SIGNALED as well as CRASH_NATIVE: Android classifies a fatal signal as
+    // "signaled" whenever the crash handler did not claim it, which is exactly
+    // what a segfault inside a native addon looks like — the device's own crash
+    // came through as SIGNALED, and the dump was there the whole time.
+    val trace = when (info.reason) {
+      ApplicationExitInfo.REASON_CRASH_NATIVE, ApplicationExitInfo.REASON_SIGNALED -> crashTrace(info)
+      else -> ""
+    }
 
     return listOf("the last abnormal exit was $whenText: $why ($where)$description", memory, trace)
       .filter { it.isNotEmpty() }

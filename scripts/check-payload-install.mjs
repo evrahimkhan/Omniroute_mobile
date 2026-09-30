@@ -171,7 +171,29 @@ async function main() {
   const longDir = join(standalone, 'deep', 'a'.repeat(60), 'b'.repeat(60));
   mkdirSync(longDir, { recursive: true });
   writeFileSync(join(longDir, 'long-name.txt'), 'deep\n');
-  writeFileSync(join(standalone, 'node_modules', 'next', 'package.json'), '{}\n');
+  writeFileSync(join(standalone, 'node_modules', 'next', 'package.json'), '{}');
+
+  /**
+   * A native library header, as the payload scanner reads it: 20 bytes, ELF magic
+   * and an e_machine value. Written by hand because the point is what the scanner
+   * does with a *foreign* CPU, and no real arm64 library exists on this runner.
+   */
+  const writeElf = (file, machine) => {
+    const header = Buffer.alloc(20);
+    header.write('\x7fELF', 0, 'binary');
+    header[4] = 2; // 64-bit
+    header[5] = 1; // little-endian
+    header.writeUInt16LE(2, 16); // e_type = ET_EXEC
+    header.writeUInt16LE(machine, 18); // e_machine
+    writeFileSync(file, header);
+  };
+  // One for x86-64 (0x3e) and one for arm64 (0xb7). The runner is x86-64, so the
+  // arm64 one is the foreign library here; the assertion below is written against
+  // the count, not against a hardcoded CPU name.
+  const sharpDir = join(standalone, 'node_modules', 'sharp', 'build', 'Release');
+  mkdirSync(sharpDir, { recursive: true });
+  writeElf(join(sharpDir, 'sharp.node'), 0x3e);
+  writeElf(join(sharpDir, 'libvips.so'), 0xb7);
   writeFileSync(join(standalone, 'server.js'), fixtureServer('STANDALONE'));
   symlinkSync('server.js', join(standalone, 'entry-link.js'));
 
@@ -324,6 +346,16 @@ async function main() {
   );
   check('standalone payload: the entry is server.js, not the default dist/server.js', first.output.includes('entry is server.js (not dist/server.js)'));
   check('standalone payload: it is started', first.output.includes('starting server.js on 127.0.0.1:'));
+  check(
+    'the payload native libraries are inspected before the boot',
+    /native libraries in the payload: \d+/.test(first.output) ||
+      /warning: \d+ of \d+ native libraries/.test(first.output)
+  );
+  check(
+    'a library built for another CPU is named, because loading it is a silent native crash',
+    /warning: 1 of 2 native libraries in the payload are built for another CPU/.test(first.output) &&
+      (first.output.includes('libvips.so') || first.output.includes('sharp.node'))
+  );
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
   check('standalone payload: the checksum manifest was fetched and matched', first.output.includes('checksum ok'));
   check('standalone payload: it answers /healthz on the configured port', first.servedOk === 'ok');
@@ -524,7 +556,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 41;
+  const total = 43;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

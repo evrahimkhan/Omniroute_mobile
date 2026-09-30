@@ -418,6 +418,39 @@ check(
 );
 
 check(
+  'the native crash dump is captured, not just the signal number',
+  sources.host.includes('ApplicationExitInfo.REASON_CRASH_NATIVE -> "it crashed in native code') &&
+    sources.host.includes('info.traceInputStream') &&
+    sources.host.includes('private fun crashTrace(') &&
+    sources.host.includes('Regex("^\\\\s*#\\\\d+ ")'),
+  'a native crash is the one failure no log of ours can describe, and the tombstone names the library'
+);
+
+check(
+  'the signals are named in words',
+  ['SIGILL', 'SIGABRT', 'SIGSEGV', 'SIGBUS'].every((name) => sources.host.includes(name)),
+  '"killed by signal 11" is true and useless; each of these points somewhere different'
+);
+
+check(
+  'the payload is checked for native libraries built for another CPU',
+  sources.bootstrap.includes('function inspectNativeLibraries(') &&
+    sources.bootstrap.includes('function elfMachine(') &&
+    sources.bootstrap.includes('are built for ') &&
+    sources.bootstrap.indexOf('inspectNativeLibraries(appDir)') <
+      sources.bootstrap.lastIndexOf('bootTrace(`loading ${entry}`)'),
+  'the payload is built on an x86-64 runner; a prebuilt native module that travels to an arm64 phone crashes it'
+);
+
+check(
+  'the two stack defaults agree, and neither is small',
+  (sources.module.match(/DEFAULT_STACK_MB = (\d+)/) ?? [])[1] ===
+    (sources.host.match(/DEFAULT_STACK_MB = (\d+)/) ?? [])[1] &&
+    Number((sources.host.match(/DEFAULT_STACK_MB = (\d+)/) ?? [])[1]) >= 16,
+  'the frames under JavaScript recursion live on the native stack, and running out is a SIGSEGV'
+);
+
+check(
   'the app can still be allowed a large heap',
   manifest.includes('largeHeap'),
   'a Next server booting on a phone is what the flag exists for'

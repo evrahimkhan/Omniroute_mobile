@@ -29,6 +29,8 @@ import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  readdirSync,
+  readSync,
   createReadStream,
   createWriteStream,
   existsSync,
@@ -310,6 +312,105 @@ class ByteReader {
       remaining -= take;
     }
   }
+}
+
+/** ELF e_machine values, for the CPUs a payload might have been built for. */
+const ELF_MACHINES = { 0x03: 'x86', 0x28: 'arm', 0x3e: 'x86-64', 0xb7: 'arm64' };
+
+function machineName(code) {
+  return ELF_MACHINES[code] ?? `0x${code.toString(16)}`;
+}
+
+/**
+ * The CPU an ELF binary was built for, or null when the file is not readable ELF.
+ *
+ * The payload is assembled on a GitHub runner (x86-64) from a Next.js build whose
+ * `standalone` output copies whichever prebuilt native modules npm installed
+ * there. Nothing in that pipeline knows the phone is arm64: a `sharp` or
+ * `onnxruntime` binary built for the runner's CPU travels to the phone inside the
+ * payload, and what happens when something loads it is a native crash — the app
+ * simply disappears, with nothing in any log. Reading 20 bytes of each library is
+ * cheap enough to do before every boot, and it is the difference between "node
+ * crashed" and "this file is for the wrong CPU".
+ */
+function elfMachine(file) {
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const header = Buffer.alloc(20);
+      if (readSync(fd, header, 0, 20, 0) < 20) return null;
+      // 0x7f 'E' 'L' 'F'
+      if (header[0] !== 0x7f || header[1] !== 0x45 || header[2] !== 0x4c || header[3] !== 0x46) return null;
+      return header.readUInt16LE(18);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Unreadable, or not a regular file: not our business here.
+    return null;
+  }
+}
+
+/**
+ * Native libraries in the payload, and which of them are for another CPU.
+ *
+ * A report rather than a refusal, on purpose: a wrong-arch library that nothing
+ * loads is harmless, and this runs before every boot — including one that would
+ * otherwise have worked. What it buys is that the warning is in the log *before*
+ * the crash it predicts, so a crash report says which file to suspect instead of
+ * leaving nothing at all.
+ */
+function inspectNativeLibraries(appDir) {
+  const expected = process.arch === 'arm64' ? 0xb7 : process.arch === 'x64' ? 0x3e : null;
+  const binaries = [];
+  const queue = [appDir];
+  let visited = 0;
+  while (queue.length && visited < 120_000) {
+    const dir = queue.pop();
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Nothing native lives in these, and they are where the huge trees are.
+        if (entry.name !== '.cache' && entry.name !== '.git') queue.push(full);
+      } else if (entry.name.endsWith('.node') || entry.name.endsWith('.so')) {
+        binaries.push({ file: full, machine: elfMachine(full) });
+      }
+    }
+  }
+
+  if (!binaries.length) {
+    log('native libraries in the payload: none');
+    return;
+  }
+
+  const mismatched = expected === null ? [] : binaries.filter((item) => item.machine !== null && item.machine !== expected);
+  const unreadable = binaries.filter((item) => item.machine === null).length;
+  if (mismatched.length) {
+    const named = mismatched
+      .slice(0, 3)
+      .map((item) => `${path.relative(appDir, item.file)} (${machineName(item.machine)})`)
+      .join(', ');
+    log(
+      `warning: ${mismatched.length} of ${binaries.length} native libraries in the payload are built for ` +
+        `another CPU than this phone (${process.arch}): ${named} — loading one of those is a native crash ` +
+        `with no output at all`
+    );
+    return;
+  }
+
+  // A library whose header could not be read is not a mismatch, but it is not
+  // evidence of a match either: say so rather than give a clean bill of health.
+  log(
+    `native libraries in the payload: ${binaries.length}, all built for ${machineName(expected) ?? process.arch}` +
+      (unreadable ? ` (${unreadable} unreadable)` : '')
+  );
 }
 
 /** Parse the numeric fields of a tar header (they are NUL/space padded octal). */
@@ -873,6 +974,14 @@ async function main() {
   log(`starting ${entry} on ${process.env.HOSTNAME}:${process.env.PORT}`);
   // Written before the import, because this is the step the app has been seen
   // to die in — and a process that dies here prints nothing at all.
+  // Before the boot, because this is the last moment at which a wrong-arch
+  // library can be reported *by name* rather than inferred from a disappearance.
+  try {
+    inspectNativeLibraries(appDir);
+  } catch (err) {
+    log(`warning: could not inspect the payload's native libraries: ${err.message}`);
+  }
+
   bootTrace(`loading ${entry}`);
   try {
     await import(pathToFileURL(serverEntry).href);

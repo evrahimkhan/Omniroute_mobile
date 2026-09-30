@@ -836,6 +836,80 @@ entry calls `process.abort()`: SIGABRT in native code, no JavaScript handler,
 nothing in the gateway log — and the record still ends at `loading server.js`,
 which is the assertion that keeps this honest.
 
+### 5o. Signal 11: the crash the payload could not report
+
+The next device run reached the point this whole feature was built for — and put
+the fault somewhere new. The log shows the payload booting *completely*:
+
+```
+[STARTUP] Embedded services bootstrap complete
+[INFO] [MEMORY_MANAGER] Registered backend {"id":"sqlite"}
+[INFO] [MEMORY_MANAGER] Initialized backend {"id":"sqlite"}
+```
+
+and then the app is gone. Android's exit record names it:
+
+```
+the last abnormal exit was 2026-10-01 03:24:
+it crashed in native code — SIGSEGV (a crash in native code — a library, not the payload's JavaScript)
+(while it was in the foreground)
+```
+
+Not memory (`lowMemory=false`, device free 2839 MB of 7446 MB), not the heap cap
+(512 MB budget, capped to 341 MB, 15 MB used), not the payload's JavaScript — a
+segfault in native code, in the foreground, during startup. Two earlier deaths
+were `SIGABRT`, which is what node's own fatal-error path raises.
+
+So three changes, all pointed at that class of failure.
+
+**The tombstone is read, not just the signal number.** A native crash is the one
+failure no log of ours can describe: the process dies between two instructions.
+Android keeps the dump, and `ApplicationExitInfo.getTraceInputStream()` returns
+it — the signal and fault address, the abort message, and the backtrace, whose
+frames name the *library and offset* that faulted. That is the difference
+between "node crashed" and "libonnxruntime.so crashed", and only one of those is
+actionable. It is trimmed (a tombstone is truncated, an ANR trace is not) to the
+signal line, the abort message and the first frames, and printed under "Last
+abnormal exit" with the memory the process was using (`Pss`, `Rss`) — the number
+that makes the heap cap's value meaningful.
+
+Signals are also named in words now: `SIGILL` (a library for the wrong CPU),
+`SIGABRT` (node's own fatal path, which prints first), `SIGBUS`, `SIGSEGV`,
+`SIGKILL`. "Killed by signal 11" was true and useless.
+
+**The payload is checked for native libraries built for another CPU.** This is
+the hypothesis the evidence points at, and it is structural: the payload is
+assembled on a GitHub runner (**x86-64**) from a Next.js build whose `standalone`
+output copies whichever prebuilt native modules `npm ci` installed *there*.
+Nothing in that pipeline knows the phone is arm64. `sharp`, `onnxruntime-node`,
+`better-sqlite3` and friends ship prebuilds for the platform they were installed
+on, and a binary for the wrong CPU travels to the phone inside the payload — the
+install succeeds, the payload boots, and the first `require()` that touches the
+library dies with no output. CI cannot catch it: the payload is booted on the
+runner, where an x86-64 binary is exactly right.
+
+So the bootstrap reads 20 bytes of every `.node`/`.so` in the installed payload
+and compares `e_machine` against `process.arch`, before every boot:
+
+```
+[gateway] native libraries in the payload: 41, all built for arm64
+[gateway] warning: 3 of 41 native libraries in the payload are built for another
+          CPU than this phone (arm64): node_modules/sharp/build/Release/sharp-linux-x64.node
+          (x86-64), … — loading one of those is a native crash with no output at all
+```
+
+It reports rather than refuses: a foreign library that nothing loads is
+harmless, and this runs before every boot including ones that work. What it buys
+is that the warning is in the log *before* the crash it predicts.
+
+**More native stack.** The 8 MB default predates the payload ever booting. The
+gateway is a Next.js server: tens of thousands of modules loaded through chains
+of C++ frames, and node's `--stack-size` bounds only *JavaScript* recursion —
+the frames under it live on the thread's stack, and running out of that is a
+SIGSEGV, not a catchable error. The default is now 32 MB, which costs address
+space and nothing else on a 64-bit process. `runtime:contract` asserts the two
+declarations of that default agree.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

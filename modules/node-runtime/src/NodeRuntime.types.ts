@@ -48,7 +48,10 @@ export interface StartOptions {
   env?: Record<string, string>;
   /** Defaults to `<filesDir>/node-runtime/node.log`. */
   logFilePath?: string;
-  /** V8 needs a deep stack; clamped to 2–64 MB. Defaults to 8. */
+  /**
+   * Stack for the thread node runs on, clamped to 2–64 MB. Defaults to 32: the
+   * frames under JavaScript's recursion live here, and running out is a SIGSEGV.
+   */
   stackSizeMb?: number;
   /**
    * Keep the gateway running while the app is in the background, by starting a

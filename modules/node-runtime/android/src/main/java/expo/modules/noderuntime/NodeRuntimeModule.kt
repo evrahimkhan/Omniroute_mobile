@@ -246,7 +246,18 @@ class NodeRuntimeModule : Module() {
   }
 
   companion object {
-    private const val DEFAULT_STACK_MB = 8
+  /**
+   * Stack for the thread node runs on.
+   *
+   * The gateway is a Next.js server: tens of thousands of modules loaded through
+   * a chain of C++ frames, and a native stack overflow is a SIGSEGV — the process
+   * is gone with nothing written, which is exactly the death this is here to
+   * avoid. Node's own `--stack-size` bounds *JavaScript* recursion; the frames
+   * under it live on this stack, so the room has to be here. 8 MB was chosen
+   * before the payload ever booted; 32 MB costs only address space, which a
+   * 64-bit process has in abundance.
+   */
+    private const val DEFAULT_STACK_MB = 32
     private const val MAX_LOG_BYTES = 8 * 1024 * 1024
     private const val MAX_FILE_BYTES = 32 * 1024 * 1024
   }

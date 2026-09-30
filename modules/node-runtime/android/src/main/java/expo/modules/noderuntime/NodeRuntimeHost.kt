@@ -112,7 +112,18 @@ internal object NodeRuntimeHost {
    */
   private const val RUNTIME_LOG_FILE_NAME = "runtime.log"
   private const val THREAD_NAME = "omniroute-node"
-  private const val DEFAULT_STACK_MB = 8
+  /**
+   * Stack for the thread node runs on.
+   *
+   * The gateway is a Next.js server: tens of thousands of modules loaded through
+   * a chain of C++ frames, and a native stack overflow is a SIGSEGV — the process
+   * is gone with nothing written, which is exactly the death this is here to
+   * avoid. Node's own `--stack-size` bounds *JavaScript* recursion; the frames
+   * under it live on this stack, so the room has to be here. 8 MB was chosen
+   * before the payload ever booted; 32 MB costs only address space, which a
+   * 64-bit process has in abundance.
+   */
+  private const val DEFAULT_STACK_MB = 32
   private const val MIN_STACK_MB = 2
   private const val MAX_STACK_MB = 64
   private const val MAX_LOG_BYTES = 8 * 1024 * 1024
@@ -227,6 +238,64 @@ internal object NodeRuntimeHost {
     return runCatching { previousExitFrom(context) }.getOrNull()
   }
 
+  /**
+   * A signal number as the thing it actually means.
+   *
+   * "killed by signal 11" is true and useless. These five cover what an embedded
+   * node process on Android dies of, and each points somewhere different: a
+   * SIGILL usually means a library built for the wrong CPU, SIGABRT means node's
+   * own fatal-error path (which prints), and SIGSEGV is a genuine native fault.
+   */
+  private fun signalName(signal: Int): String = when (signal) {
+    4 -> "SIGILL (an illegal instruction — usually a library built for a different CPU)"
+    6 -> "SIGABRT (the process aborted itself; node's own fatal errors do this and print first)"
+    7 -> "SIGBUS (an invalid memory access, often a truncated file)"
+    9 -> "SIGKILL (the system killed it outright)"
+    11 -> "SIGSEGV (a crash in native code — a library, not the payload's JavaScript)"
+    15 -> "SIGTERM"
+    else -> "signal $signal"
+  }
+
+  /**
+   * The crash dump Android kept for a native death, trimmed to what identifies it.
+   *
+   * This is the one thing the app's own logs can never contain. A native crash
+   * kills the process between two instructions: nothing is written on the way
+   * out, so both logs stop wherever the payload happened to be, and the app is
+   * left knowing only that it is gone. Android records the dump — the signal,
+   * the fault address, and, decisively, *which library and offset faulted*.
+   * That last part is the difference between "node crashed while starting the
+   * gateway" and "libonnxruntime.so crashed", and only one of those is
+   * actionable.
+   *
+   * Only the head of the dump is read (a tombstone is capped but an ANR trace is
+   * not), and only the lines that identify it are kept: the signal line, any
+   * abort message, and the first frames of the backtrace.
+   */
+  private fun crashTrace(info: ApplicationExitInfo): String {
+    val text = runCatching {
+      info.traceInputStream?.use { stream ->
+        // Bounded: a native dump is truncated by the system, an ANR trace is not.
+        val buffer = ByteArray(64 * 1024)
+        val read = stream.read(buffer)
+        if (read <= 0) "" else String(buffer, 0, read, Charsets.UTF_8)
+      }
+    }.getOrNull().orEmpty()
+    if (text.isEmpty()) return ""
+
+    val frames = Regex("^\\s*#\\d+ ")
+    return text.lineSequence()
+      .map { it.trimEnd() }
+      .filter { line ->
+        line.startsWith("signal ") ||
+          line.startsWith("abort message") ||
+          line == "backtrace:" ||
+          frames.containsMatchIn(line)
+      }
+      .take(14)
+      .joinToString("\n")
+  }
+
   private fun previousExitFrom(context: Context): String? {
     val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return null
     // (package, pid, maxNum): this app's own history, every pid, at most sixteen
@@ -247,10 +316,10 @@ internal object NodeRuntimeHost {
     val whenText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(info.timestamp))
     val why = when (info.reason) {
       ApplicationExitInfo.REASON_LOW_MEMORY -> "the system killed it for memory"
-      ApplicationExitInfo.REASON_CRASH_NATIVE -> "it died in native code (signal ${info.status})"
+      ApplicationExitInfo.REASON_CRASH_NATIVE -> "it crashed in native code — ${signalName(info.status)}"
       ApplicationExitInfo.REASON_CRASH -> "it crashed (Java)"
       ApplicationExitInfo.REASON_ANR -> "it stopped responding and was killed"
-      ApplicationExitInfo.REASON_SIGNALED -> "it was killed by signal ${info.status}"
+      ApplicationExitInfo.REASON_SIGNALED -> "it was killed — ${signalName(info.status)}"
       ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "the system killed it for using too many resources"
       ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "it failed to start"
       ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "it was killed after a permission change"
@@ -262,7 +331,18 @@ internal object NodeRuntimeHost {
       "while it was in the background"
     }
     val description = info.description?.takeIf { it.isNotBlank() }?.let { " — ${it.trim()}" } ?: ""
-    return "the last abnormal exit was $whenText: $why ($where)$description"
+    // Memory at death, when Android has it: the heap cap's number only means
+    // something next to what the process was actually using.
+    val memory = if (info.pss > 0L) {
+      "at the time: Pss ${info.pss / (1024 * 1024)} MB, Rss ${info.rss / (1024 * 1024)} MB"
+    } else {
+      ""
+    }
+    val trace = if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) crashTrace(info) else ""
+
+    return listOf("the last abnormal exit was $whenText: $why ($where)$description", memory, trace)
+      .filter { it.isNotEmpty() }
+      .joinToString("\n")"
   }
 
   fun gatewayDir(context: Context): File = File(context.filesDir, DIR_NAME)

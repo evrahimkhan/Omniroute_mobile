@@ -246,6 +246,22 @@ jobs:
             node scripts/prune-native-libs.mjs "$dir" --json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # An annotation as well: the run's log is not readable from every
+          # environment, and this is the one line that says what the payload
+          # contains and why anything was dropped.
+          node scripts/prune-native-libs.mjs "$dir" --json > /tmp/native-report.json
+          node -e '
+            const report = JSON.parse(require("node:fs").readFileSync("/tmp/native-report.json", "utf8"));
+            const shown = report.removed.slice(0, 5).map((item) => item.file).join(", ");
+            const detail = [
+              `${report.libraries} libraries`,
+              `dropped ${report.removed.length}`,
+              `${report.wrongArch} wrong CPU`,
+              `${report.wrongLibc} desktop libc`,
+              report.unreadable ? `${report.unreadable} unreadable` : null,
+            ].filter(Boolean).join(", ");
+            console.log(`::notice title=Native libraries in the payload::${detail}${shown ? `: ${shown}` : ""}`);
+          '
           node scripts/prune-native-libs.mjs "$dir"
           # Then prove it, so a payload that still carries one fails here — with a
           # list — instead of on someone's phone.

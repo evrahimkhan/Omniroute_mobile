@@ -504,6 +504,16 @@ check(
 );
 
 check(
+  'a clean pass is remembered, keyed on the install, and only when nothing moved',
+  sources.bootstrap.includes("const NATIVE_CHECK_NAME = 'native-check.json'") &&
+    sources.bootstrap.includes('stamp.installedAt === installedAt && stamp.removed === 0') &&
+    sources.bootstrap.includes('writeFileSync(') &&
+    sources.bootstrap.includes('marker?.installedAt ?? null') &&
+    !/if \(stamp\.removed !== 0\)/.test(sources.bootstrap),
+  'the scan runs before every boot, but a stamp is only trustworthy for the install it was written for'
+);
+
+check(
   'the scan of a big payload stays bounded',
   sources.bootstrap.includes('LIBC_SCAN_FILE_LIMIT') &&
     sources.bootstrap.includes('LIBC_SCAN_BUDGET') &&

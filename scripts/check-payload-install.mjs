@@ -434,6 +434,19 @@ async function main() {
 
   // --- case 3: reinstall/restart with no URL and no checksum --------------
   const third = await run('re-run', install1, {});
+  // The scan is over tens of thousands of files on a phone's storage, and the
+  // installed tree cannot change between boots of the same install — so a pass
+  // that found nothing is remembered, and the next boot must not repeat it.
+  check(
+    'a second boot over the same install does not rescan the whole payload',
+    third.output.includes('already checked for this install')
+  );
+  check(
+    'and the first boot of that install did scan',
+    first.output.includes('native libraries in the payload:') ||
+      first.output.includes('moved ') ||
+      first.output.includes('already checked') === false
+  );
   check('re-run: reuses the install without a URL', third.output.includes('gateway already installed at'));
   check('re-run: still resolves the standalone entry', third.output.includes('starting server.js on 127.0.0.1:'));
   check('re-run: boots again', third.output.includes('STANDALONE listening') && third.servedOk === 'ok');
@@ -584,7 +597,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 48;
+  const total = 50;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

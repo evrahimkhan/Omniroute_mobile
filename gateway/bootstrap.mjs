@@ -29,6 +29,7 @@ import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  readFileSync,
   readdirSync,
   readSync,
   createReadStream,
@@ -332,6 +333,9 @@ const LIBC_MARKERS = [
   { marker: 'libc.musl-', flavour: 'musl' },
 ];
 
+/** Where a clean pass is remembered, so the scan is not repeated every boot. */
+const NATIVE_CHECK_NAME = 'native-check.json';
+
 /**
  * Nothing above this is scanned. A full pass runs before every boot, and a
  * phone's storage is slow: the libraries that matter are a few megabytes each.
@@ -482,7 +486,30 @@ function elfMachine(file) {
  * and this runs before every boot. It leaves the tree alone once the files are
  * gone, so the common case costs one line in the log.
  */
-async function quarantineForeignLibraries(appDir, quarantineDir) {
+async function quarantineForeignLibraries(appDir, quarantineDir, installedAt) {
+  // A clean pass is remembered, because this runs before *every* boot and the
+  // rest of it is a scan over tens of thousands of files on a phone's storage.
+  // The installed tree cannot change between boots of the same install — a new
+  // payload rewrites the marker, and its timestamp is what the stamp is keyed
+  // on — so a second identical scan can only produce the same answer.
+  //
+  // A pass that *moved* something is deliberately not remembered: the next boot
+  // re-checks that the files really left, and that pass is cheap because they
+  // are gone.
+  const stampPath = process.env.GATEWAY_DIR ? path.join(process.env.GATEWAY_DIR, NATIVE_CHECK_NAME) : '';
+  if (installedAt && stampPath) {
+    try {
+      const stamp = JSON.parse(readFileSync(stampPath, 'utf8'));
+      if (stamp.installedAt === installedAt && stamp.removed === 0) {
+        log(`native libraries in the payload: already checked for this install (${stamp.checkedAt})`);
+        return;
+      }
+    } catch {
+      // No stamp, or an unreadable one: check the payload. Never the other way
+      // round — a missing stamp must not be read as "clean".
+    }
+  }
+
   const expected = process.arch === 'arm64' ? 0xb7 : process.arch === 'x64' ? 0x3e : null;
   const binaries = [];
   const queue = [appDir];
@@ -541,6 +568,16 @@ async function quarantineForeignLibraries(appDir, quarantineDir) {
 
   if (!unloadable.length) {
     const unreadable = binaries.length - binaries.filter((item) => item.machine !== null).length;
+    if (installedAt && stampPath) {
+      try {
+        writeFileSync(
+          stampPath,
+          JSON.stringify({ installedAt, checkedAt: new Date().toISOString(), removed: 0, libraries: binaries.length })
+        );
+      } catch {
+        // The stamp is an optimisation; failing to write it costs a rescan.
+      }
+    }
     // Unreadable and unscanned files are not a clean bill of health, so they are
     // counted rather than folded into "all good".
     log(
@@ -1155,7 +1192,7 @@ async function main() {
   // Before the boot, because a wrong-arch library is a crash that happens *during*
   // the boot, and moving it out of the way is the only thing that prevents it.
   try {
-    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'));
+    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'), marker?.installedAt ?? null);
   } catch (err) {
     log(`warning: could not check the payload's native libraries: ${err.message}`);
   }

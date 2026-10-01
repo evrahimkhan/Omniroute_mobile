@@ -736,9 +736,12 @@ each past process ended and why: `REASON_LOW_MEMORY`, `REASON_CRASH_NATIVE`
 (with the signal), `REASON_CRASH`, `REASON_ANR`, `REASON_SIGNALED`,
 `REASON_EXCESSIVE_RESOURCE_USAGE`, and so on, plus the time and whether the
 process was foreground. `NodeRuntimeHost.previousExit()` asks for the app's own
-history (`ActivityManager.getHistoricalProcessExitReasons`) and the card shows the
-newest abnormal record under **"Last abnormal exit"** — above the logs, because
-that is the question everyone actually has.
+history — `ActivityManager.getHistoricalProcessExitReasons(packageName, 0, 16)`,
+the public call: there is no `getHistoricalProcessExitInfos`, and guessing that
+name cost a build — and the card shows the newest abnormal record under **"Last
+abnormal exit"** — above the logs, because that is the question everyone actually
+has. Android reports a fatal signal as `REASON_SIGNALED` when the crash handler
+did not claim it, which is why that reason reads the tombstone too.
 
 The wording carries the time the exit happened and claims no more than that: a
 normal exit does not clear the history, so the record can be older than the last
@@ -1003,7 +1006,12 @@ before each boot, and says which is which:
 
 On a phone that scan has to stay cheap, because it runs before every boot over
 tens of thousands of files: nothing above 32 MB is read, the whole pass has a
-256 MB budget, and how much was skipped is reported rather than hidden.
+256 MB budget, and how much was skipped is reported rather than hidden. A pass
+that finds nothing is also *remembered* (`native-check.json`, keyed on the
+install's timestamp), so a second boot of the same install says
+`already checked for this install` instead of reading the tree again. A pass
+that moved something is deliberately not remembered: the next boot re-checks
+that the files really left, which is cheap because they are gone.
 
 **And the modules that need those libraries are named before the boot.** Proving
 which feature will be degraded used to require watching a boot fail around one:

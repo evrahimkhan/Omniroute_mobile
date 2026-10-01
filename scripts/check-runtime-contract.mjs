@@ -504,6 +504,16 @@ check(
 );
 
 check(
+  'the cache directory Next.js probes for is created before the boot',
+  sources.bootstrap.includes('function prepareCacheDirectory(') &&
+    sources.bootstrap.includes('process.env.XDG_CACHE_HOME') &&
+    sources.bootstrap.includes('created the cache directory') &&
+    sources.bootstrap.indexOf('prepareCacheDirectory();') <
+      sources.bootstrap.lastIndexOf('bootTrace(`loading ${entry}`)'),
+  'on Android, Next throws "Unsupported platform: android" without ~/.cache — and the 500 it causes leaves an empty log'
+);
+
+check(
   'a clean pass is remembered, keyed on the install, and only when nothing moved',
   sources.bootstrap.includes("const NATIVE_CHECK_NAME = 'native-check.json'") &&
     sources.bootstrap.includes('stamp.installedAt === installedAt && stamp.removed === 0') &&

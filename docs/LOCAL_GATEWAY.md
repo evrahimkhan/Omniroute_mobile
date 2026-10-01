@@ -1026,13 +1026,46 @@ cannot dlopen a library and cannot itself be the crash it is reporting on. A
 package that is import-only is reported separately from one that is missing,
 because the two mean different things.
 
+### 5r. The cache directory Next.js probes for
+
+Upstream's Termux guide names a failure that has nothing to do with native
+libraries and everything to do with Android: Next's `getCacheDirectory()` does
+not handle `process.platform === 'android'`. On Android it requires `~/.cache`
+(or `XDG_CACHE_HOME`) to *already* exist, and when it does not, loading the
+instrumentation hook throws `Unsupported platform: android`. That hook is what
+starts the gateway's own logging, so the failure arrives as a bare
+`500 Internal Server Error` on every request with nothing in the log — and the
+dashboard simply appears broken.
+
+Upstream's CLI creates the directory before Next.js starts; our payload is booted
+from `server.js` and has no CLI in front of it, so the bootstrap does it now,
+before the import that would otherwise throw:
+
+```
+[gateway] created the cache directory /data/user/0/com.evrahimkhan.omniroute.mobile/files/.cache
+          (Next.js requires it on Android)
+```
+
+`XDG_CACHE_HOME` is set as well as the directory being created — a cache
+directory Next does not know about is only half the fix — and the line is only
+logged when the directory had to be made, so later boots say nothing about it.
+The e2e test boots a payload with an empty `HOME` and asserts both the directory
+and the line.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:
 
 - Image processing (`sharp`), browser-automation providers
   (`playwright-core`), local ML compression (`onnxruntime-node`), OS keychain
-  (`keytar`), and TLS-fingerprint stealth (`tls-client-node`).
+  (`keytar`), and TLS-fingerprint stealth (`tls-client-node`). None of them
+  publishes an Android build (`sharp` and `onnxruntime-node` ship prebuilds for
+  desktop platforms; `@wreq-js` is the exception, with an
+  `android-arm64` binding), so the payload simply does not carry them: the
+  bootstrap removes every library a phone cannot load, and the modules that need
+  one are named in the log before the boot (`native modules in the payload: …`).
+  A degraded feature therefore reports itself instead of taking the gateway
+  down.
 - Anything the CLI does by spawning a process (daemon mode, launching external
   CLIs, tray, Redis container management).
 - iOS is out of scope for Phase 1–4: no Termux equivalent, `process.exit()`
@@ -1044,8 +1077,9 @@ These are expected degradations; the UI must say so rather than pretend:
 | Risk | Mitigation |
 |---|---|
 | `digidem/nodejs-mobile` is a young, low-adoption fork (2 stars at time of writing) | Pin the exact release + verify the artifact checksum in CI; the build recipe is reproducible from upstream Node (`scripts/prepare.sh`), so we can rebuild it ourselves if it stalls. |
-| Untested on a real device | Every part of phases 1–5 that a machine *can* verify is verified (CI builds the native code and checks the APK's contents, including the merged manifest's foreground-service declarations; the installer is exercised end to end against the real payload; the JS↔Kotlin↔manifest contract is asserted in App CI), but nothing has run inside an Android app process yet. That is the next milestone, and it is a hardware one. |
+| Untested on a real device | **Partly proven now.** On the phone: the APK installs and the runtime starts inside the app process; the payload downloads (776 MB, resumable), verifies, unpacks (44,003 files) and installs; the boot record advances to `loading server.js`; the heap cap is derived from Android's own budget (512 MB → 341 MB) and applied in argv; a native crash is reported with its signal and tombstone; and a payload's foreign-architecture libraries are detected and quarantined. **Not yet proven on hardware:** the gateway *serving* — the device previously died in native code at that point (§5p), and the fix has not been re-run there. Keep-alive surviving a backgrounded app, and the resume path on a real flaky network, are also unproven. |
 | Android may still stop the gateway | A foreground service is the strongest thing an app can do, not a guarantee: OEM battery managers (Xiaomi, Huawei, Samsung) kill them anyway, and so can the user. The card reports the real state (`keepAlive`, read from the service) instead of assuming, and the runtime log keeps the reason. |
-| First-run download is big | Partly solved. §5b's pipeline packs the tree in CI — the packaged npm tree comes to 115.6 MB gzipped, and the standalone build it is meant to carry is smaller — and the digest is published next to it, so the app verifies what it downloads. Until the job is dispatched, "install" still means npm's tree, so treat it as Wi-Fi-only. |
-| The app and the payload drift apart | The bootstrap is the app's contract with the payload; it is versioned with the app, but the payload URL is not pinned to a version yet, so "latest" can move under an installed app. Pinning both to one release is part of the CI job in §5b. |
+| First-run download is big | Solved in shape, not in size. The payload is published as a release asset (`gateway-payload`, ~690 MiB for the current build) with a manifest whose digest the app verifies; the download resumes across interruptions with a 2-minute stall detector. It is still a big download: the card asks for Wi-Fi, and the app re-downloads only when the published digest changes. |
+| The app and the payload drift apart | The bootstrap is the app's contract with the payload, and the payload URL points at a *fixed* release tag (`gateway-payload`), not `releases/latest` — so an APK release cannot break an installed app's ability to download. When the payload is replaced, the app notices the changed digest in the manifest and re-installs before booting. What is still unpinned is the *payload build* against the app build: a payload that needs a newer bootstrap could reach an older app, and the version handshake for that is not written. |
 | Native exec from app storage | Avoided entirely — the runtime lives in the APK's lib dir. |
+| A payload carrying libraries the phone cannot load | This was not hypothetical: the payload shipped 29 x86-64 libraries to an arm64 phone, and the app died in native code on every start (§5p). Both ends now refuse them — the payload build prunes wrong-CPU *and* desktop-libc binaries and fails if any survive, and the device quarantines them before each boot — and the modules that need them are named before the boot. |

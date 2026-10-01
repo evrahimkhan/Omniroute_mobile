@@ -387,6 +387,19 @@ async function main() {
   check('standalone payload: the payload itself booted (not just the log line)', first.output.includes('STANDALONE listening'));
   check('standalone payload: the checksum manifest was fetched and matched', first.output.includes('checksum ok'));
   check('standalone payload: it answers /healthz on the configured port', first.servedOk === 'ok');
+  // Upstream's own Android guidance: Next's getCacheDirectory() does not handle
+  // `process.platform === 'android'`, and without ~/.cache existing the
+  // instrumentation hook fails to load — which means no gateway logging and a
+  // bare 500 on every request. The CLI creates it; a payload booted from
+  // server.js has no CLI, so the bootstrap does.
+  check(
+    'the cache directory Next.js requires on Android exists after the boot',
+    existsSync(join(home, '.cache'))
+  );
+  check(
+    'and the log says it created it, so the fix is visible in a crash report',
+    first.output.includes('created the cache directory')
+  );
   check(
     'the install checks for free space before writing the archive',
     /free space [\d.]+ MB, need about [\d.]+ MB/.test(first.output)
@@ -597,7 +610,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 50;
+  const total = 52;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

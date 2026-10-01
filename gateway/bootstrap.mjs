@@ -320,6 +320,38 @@ class ByteReader {
 const ELF_MACHINES = { 0x03: 'x86', 0x28: 'arm', 0x3e: 'x86-64', 0xb7: 'arm64' };
 
 /**
+ * Create the cache directory Next.js probes for, before it is asked.
+ *
+ * Next's `getCacheDirectory()` does not know `process.platform === 'android'`:
+ * on Android it requires `~/.cache` (or `XDG_CACHE_HOME`) to *already* exist, and
+ * when it does not, loading the instrumentation hook throws
+ * `Unsupported platform: android`. That hook is what starts the gateway's own
+ * logging, so the failure surfaces as a bare `500 Internal Server Error` on every
+ * request with nothing in the log — the worst kind of failure to diagnose from a
+ * phone. The upstream CLI creates this directory before Next.js starts; a payload
+ * booted from `server.js` has no CLI in front of it, so it happens here, before
+ * the import rather than after it.
+ *
+ * Only reported when it had to be created: on every later boot the directory is
+ * already there and there is nothing to say.
+ */
+function prepareCacheDirectory() {
+  const home = process.env.HOME;
+  const cache = process.env.XDG_CACHE_HOME || (home ? path.join(home, '.cache') : '');
+  if (!cache) return;
+  const existed = existsSync(cache);
+  try {
+    mkdirSync(cache, { recursive: true });
+    // Set as well as create: a cache directory Next does not know about is only
+    // half the fix, and upstream's CLI sets this for the same reason.
+    if (!process.env.XDG_CACHE_HOME) process.env.XDG_CACHE_HOME = cache;
+    if (!existed) log(`created the cache directory ${cache} (Next.js requires it on Android)`);
+  } catch (err) {
+    log(`warning: could not create the cache directory ${cache}: ${err.message}`);
+  }
+}
+
+/**
  * Markers of a libc Android does not have.
  *
  * Android's libc is Bionic, and it is not glibc or musl: a shared library linked
@@ -1026,6 +1058,9 @@ async function main() {
   // unpacking (a full disk, a killed process) leaves the same silence.
   openBootLog(gatewayDir);
   bootTrace(`runtime ready on node ${process.version} (pid ${process.pid})`);
+
+  // Before anything Next.js is loaded: see prepareCacheDirectory.
+  prepareCacheDirectory();
 
   const appDir = path.join(gatewayDir, 'app');
   // Two payload shapes are in play: a packaged `npm` tree (entry

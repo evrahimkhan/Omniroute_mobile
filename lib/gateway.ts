@@ -1,9 +1,12 @@
+import { looksLikeHtml, websiteMessage } from './api/client';
 /**
  * Gateway URL helpers + health probing.
  *
- * The mobile app is a native shell around an OmniRoute gateway instance
- * (self-hosted or https://omniroute.online). All dashboard pages are served
- * by that gateway; this file keeps URLs sane and probes `/healthz`.
+ * The app talks to an OmniRoute gateway instance — the one hosted on this phone
+ * or one the user runs elsewhere. This file keeps URLs sane and probes the
+ * gateway's own liveness routes. It deliberately never probes `/`: a website
+ * answering there is not a gateway, and treating it as one is how a marketing
+ * site came to look "Online" while every screen 404'd.
  */
 
 import { normalizeServerUrl } from './serverUrl';
@@ -27,6 +30,8 @@ export interface GatewayStatus {
   status?: number;
   latencyMs?: number;
   detail?: string;
+  /** What answered: the gateway API, a web page, or nothing at all. */
+  kind?: 'gateway' | 'website' | 'nothing';
 }
 
 /**
@@ -35,34 +40,58 @@ export interface GatewayStatus {
  */
 export async function checkGateway(serverUrl: string, timeoutMs = 10000): Promise<GatewayStatus> {
   const base = normalizeServerUrl(serverUrl);
-  if (!base) return { ok: false, detail: 'No gateway URL configured' };
+  if (!base) return { ok: false, detail: 'No gateway URL configured', kind: 'nothing' };
 
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let sawWebPage = false;
+  let lastStatus: number | undefined;
+  let answered = false;
+
   try {
-    for (const path of ['/healthz', '/livez', '/']) {
+    // Ask for the API this app actually uses, never for `/`.
+    //
+    // Falling back to the dashboard — `/` — was the bug: a website answering 200
+    // there was reported as an online gateway, so pointing the app at
+    // omniroute.online (the project's marketing site) looked like a successful
+    // connection right up until every screen 404'd.
+    for (const path of ['/api/health', '/healthz', '/livez']) {
       try {
         const res = await fetch(gatewayUrl(base, path), {
           signal: controller.signal,
           redirect: 'follow',
+          headers: { accept: 'application/json' },
         });
         const latencyMs = Date.now() - started;
-        if (res.ok) return { ok: true, status: res.status, latencyMs };
-        // Keep the last non-ok status for reporting, but try next path.
-        const detail = `HTTP ${res.status}`;
-        if (path === '/') return { ok: false, status: res.status, latencyMs, detail };
-      } catch (err) {
-        if (path === '/') {
-          // Name the URL that was tried: "Network error" on its own is what
-          // makes a working gateway look unreachable, and the scheme is the
-          // first thing to question.
-          const why = err instanceof Error && err.name === 'AbortError' ? 'Timed out' : 'Network error';
-          return { ok: false, detail: `${why} — no answer from ${base}` };
+        const text = await res.text().catch(() => '');
+        answered = true;
+
+        if (looksLikeHtml(text)) {
+          // A page here is proof of what the address is: not a gateway.
+          sawWebPage = true;
+          lastStatus = res.status;
+          continue;
         }
+        if (res.ok) return { ok: true, status: res.status, latencyMs, kind: 'gateway' };
+        lastStatus = res.status;
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') break;
       }
     }
-    return { ok: false, detail: 'Gateway reachable but no liveness route responded' };
+
+    if (sawWebPage) {
+      return { ok: false, status: lastStatus, kind: 'website', detail: websiteMessage(base) };
+    }
+    if (!answered) {
+      return { ok: false, kind: 'nothing', detail: `Network error — no answer from ${base}` };
+    }
+    return {
+      ok: false,
+      status: lastStatus,
+      kind: 'gateway',
+      detail: `Reached ${base} but no gateway route answered (last: HTTP ${lastStatus})`,
+    };
   } finally {
     clearTimeout(timer);
   }

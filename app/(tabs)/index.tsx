@@ -60,9 +60,21 @@ export default function HomeScreen() {
   }
 
   if (health.error && !health.data) {
+    // If the address answered with a web page, retrying will not help: the fix
+    // is a different address, so the second button goes there instead.
+    const wrongAddress = /web page|not a gateway/i.test(health.error);
     return (
       <Screen>
-        <ErrorState message={health.error} onRetry={reloadAll} />
+        <ErrorState
+          message={health.error}
+          title={wrongAddress ? 'This address is not a gateway' : undefined}
+          onRetry={reloadAll}
+          action={
+            wrongAddress
+              ? { label: 'Gateway settings', icon: 'cog-outline', onPress: () => router.push('/settings') }
+              : undefined
+          }
+        />
       </Screen>
     );
   }

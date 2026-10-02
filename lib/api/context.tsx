@@ -89,9 +89,15 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
       const status = await getAuthStatus(api);
       if (mounted.current) setAuthenticated(status.authenticated);
     } catch (err) {
-      // A gateway too old to have /api/auth/status is not a signed-out gateway:
-      // leave the answer unknown rather than claiming a problem.
-      if (mounted.current && err instanceof ApiError && err.status === 404) setAuthenticated(true);
+      // A 404 here means the route is not there — which is true both of a gateway
+      // too old to have /api/auth/status and of an address that is not a gateway
+      // at all (a website answers every unknown path with its own 404 page).
+      // The app cannot tell them apart, so it says nothing rather than claiming
+      // "signed in" on the strength of a 404. This was a real bug: pointing the
+      // app at omniroute.online — the project's website — showed a green
+      // "signed in" badge while every screen 404'd.
+      if (mounted.current) setAuthenticated(null);
+      if (mounted.current && err instanceof ApiError) setLastError(err);
     } finally {
       if (mounted.current) setChecking(false);
     }

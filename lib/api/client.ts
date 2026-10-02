@@ -22,18 +22,37 @@
 
 import { normalizeServerUrl } from '../serverUrl';
 
+export type ApiErrorKind = 'website' | 'session' | 'unreachable' | 'timeout' | 'http';
+
 /** An HTTP failure with the status and the URL, so callers can say both. */
 export class ApiError extends Error {
   readonly status: number | null;
   readonly url: string;
   readonly body: string;
+  /** What went wrong, for a screen that reacts rather than only displays it. */
+  readonly kind: ApiErrorKind;
 
-  constructor(message: string, options: { status?: number | null; url: string; body?: string }) {
+  constructor(
+    message: string,
+    options: { status?: number | null; url: string; body?: string; kind?: ApiErrorKind }
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = options.status ?? null;
     this.url = options.url;
     this.body = options.body ?? '';
+    this.kind =
+      options.kind ??
+      (options.status === 401 || options.status === 403
+        ? 'session'
+        : options.status === null
+          ? 'unreachable'
+          : 'http');
+  }
+
+  /** The address answered with a web page: it is not a gateway. */
+  get notAGateway(): boolean {
+    return this.kind === 'website';
   }
 
   /** The gateway wants a dashboard session before it will answer. */
@@ -47,7 +66,7 @@ export class ApiError extends Error {
   }
 
   get timedOut(): boolean {
-    return this.message.startsWith('Timed out');
+    return this.status === null && this.message.startsWith('Timed out');
   }
 }
 
@@ -78,6 +97,36 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 function snippet(text: string, max = 200): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+/**
+ * Whether a response body is a web page rather than an API answer.
+ *
+ * Not a nicety. Pointing the app at an ordinary website produced the least
+ * useful error in the product — two hundred characters of `<!DOCTYPE html>` on
+ * every screen — because a Next.js 404 page is a perfectly valid HTTP response.
+ * A page here means one thing specifically: *this address is not a gateway*, and
+ * the app can say that instead of printing the markup.
+ */
+export function looksLikeHtml(text: string): boolean {
+  const head = text.slice(0, 300).trimStart().toLowerCase();
+  return (
+    head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<!--') || head.startsWith('<head')
+  );
+}
+
+/** The host, for a message that names the address the user actually typed. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** The one sentence worth showing when the address is a website, not a gateway. */
+export function websiteMessage(url: string): string {
+  return `${hostOf(url)} answered with a web page, not the gateway API. That address is a website: a gateway serves /api/… on your own machine (http://127.0.0.1:20128) or on this phone.`;
 }
 
 function cookieFrom(headers: Headers): string | null {
@@ -168,7 +217,7 @@ export async function apiRequest<T>(
       timedOut
         ? `Timed out after ${Math.round(((request.timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000))}s — no answer from ${url}`
         : `Network error — no answer from ${url}`,
-      { url, status: null }
+      { url, status: null, kind: timedOut ? 'timeout' : 'unreachable' }
     );
   } finally {
     clearTimeout(timeout);
@@ -183,6 +232,9 @@ export async function apiRequest<T>(
   if (request.raw) {
     if (!response.ok) {
       const text = await response.text().catch(() => '');
+      if (looksLikeHtml(text)) {
+        throw new ApiError(websiteMessage(url), { url, status: response.status, body: text, kind: 'website' });
+      }
       throw new ApiError(`HTTP ${response.status} from ${url}`, {
         url,
         status: response.status,
@@ -195,9 +247,15 @@ export async function apiRequest<T>(
   const text = await response.text().catch(() => '');
 
   if (!response.ok) {
-    // Prefer the gateway's own message: its routes answer `{error: {message}}`,
-    // `{error: "..."}` or `{message: "..."}`, and that text is usually the
-    // whole answer (which field was wrong, which provider is missing).
+    // The address answered with a web page. Worth saying plainly, and early:
+    // this is what pointing the app at a website looks like.
+    if (looksLikeHtml(text)) {
+      throw new ApiError(websiteMessage(url), { url, status: response.status, body: text, kind: 'website' });
+    }
+
+    // Otherwise prefer the gateway's own message: its routes answer
+    // `{error: {message}}`, `{error: "..."}` or `{message: "..."}`, and that text
+    // is usually the whole answer (which field was wrong, which provider is missing).
     let detail = '';
     try {
       const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
@@ -221,6 +279,9 @@ export async function apiRequest<T>(
   try {
     return JSON.parse(text) as T;
   } catch {
+    if (looksLikeHtml(text)) {
+      throw new ApiError(websiteMessage(url), { url, status: response.status, body: text, kind: 'website' });
+    }
     throw new ApiError(`The gateway answered ${url} with something that is not JSON (${snippet(text, 80)})`, {
       url,
       status: response.status,

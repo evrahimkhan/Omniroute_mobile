@@ -18,7 +18,18 @@ export interface Settings {
   apiToken?: string;
 }
 
-export const DEFAULT_SERVER_URL = 'https://omniroute.online';
+/**
+ * Where a fresh install points.
+ *
+ * This used to be `https://omniroute.online`, which is the project's *website*:
+ * a marketing site whose every unknown path answers with its own 404 page. The
+ * app could reach it, so it looked configured, and every screen then failed with
+ * an HTTP 404 and a page of markup. The default is now the gateway the app is
+ * built to host — loopback on the phone — and a phone with nothing installed
+ * gets an honest "no answer from http://127.0.0.1:20128" plus the install flow
+ * in Settings, rather than a website pretending to be an API.
+ */
+export const DEFAULT_SERVER_URL = 'http://127.0.0.1:20128';
 
 const KEY = 'omniroute.settings.v1';
 

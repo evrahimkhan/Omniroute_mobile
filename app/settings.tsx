@@ -119,9 +119,9 @@ export default function SettingsScreen() {
               <Button label="Test" icon="radar" variant="secondary" loading={testing} onPress={test} style={styles.flex} />
               <Button label="Save" icon="check" onPress={saveServer} style={styles.flex} />
             </View>
-            <Pressable onPress={() => setUrl('https://omniroute.online')} style={styles.linkRow}>
-              <MaterialCommunityIcons name="earth" size={16} color={theme.textMuted} />
-              <Text style={styles.linkLabel}>Use the public gateway</Text>
+            <Pressable onPress={() => setUrl('http://127.0.0.1:20128')} style={styles.linkRow}>
+              <MaterialCommunityIcons name="cellphone-link" size={16} color={theme.textMuted} />
+              <Text style={styles.linkLabel}>Use the gateway on this phone</Text>
             </Pressable>
             {testResult ? (
               <Text style={[styles.testResult, { color: testResult.startsWith('Online') ? theme.success : theme.danger }]}>

@@ -56,6 +56,7 @@ function compile() {
     [
       'lib/serverUrl.ts',
       'lib/api/client.ts',
+      'lib/gateway.ts',
       'lib/api/shape.ts',
       'lib/api/resources.ts',
       'lib/api/chat.ts',
@@ -80,6 +81,28 @@ function compile() {
 }
 
 // ------------------------------------------------------------- fake gateway
+
+/**
+ * A server that behaves like a website: `/` is a landing page, and every other
+ * path — including everything under /api — is its own 404 page. Both are HTML,
+ * both are valid responses, and neither is a gateway.
+ */
+function startWebsite() {
+  const server = createServer((req, res) => {
+    const isRoot = req.url === '/' || req.url === '';
+    res.writeHead(isRoot ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(
+      '<!DOCTYPE html><html><head><meta charSet="utf-8"/><title>' +
+        (isRoot ? 'OmniRoute by Cheaper Inference' : '404: This page could not be found.') +
+        '</title></head><body><h1>' +
+        (isRoot ? 'The #1 open source AI router' : '404') +
+        '</h1></body></html>'
+    );
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, base: `127.0.0.1:${server.address().port}` }));
+  });
+}
 
 function startGateway() {
   const requests = [];
@@ -294,10 +317,12 @@ function startGateway() {
 // -------------------------------------------------------------------- tests
 
 const out = compile();
-const { createApi, apiRequest, ApiError, buildQuery, resolveUrl } = require(join(out, 'api', 'client.js'));
+const client = require(join(out, 'api', 'client.js'));
+const { createApi, apiRequest, ApiError, buildQuery, resolveUrl } = client;
 const shape = require(join(out, 'api', 'shape.js'));
 const resources = require(join(out, 'api', 'resources.js'));
 const chat = require(join(out, 'api', 'chat.js'));
+const gateway = require(join(out, 'gateway.js'));
 const config = require(join(out, 'api', 'config.js'));
 const collection = require(join(out, 'api', 'collection.js'));
 const format = require(join(out, 'screens', 'format.js'));
@@ -387,7 +412,11 @@ try {
     () => null,
     (err) => err
   );
-  check('an HTML body is reported as not JSON, not as a crash', html instanceof ApiError && /not JSON/.test(html.message));
+  check(
+    'an HTML body is reported as a website, not as a crash',
+    html instanceof ApiError && html.notAGateway && /web page/.test(html.message)
+  );
+  check('no raw markup reaches the UI', !/<!DOCTYPE/i.test(html.message));
 
   const unreachable = await apiRequest({ base: '127.0.0.1:1' }, '/api/health').then(
     () => null,
@@ -454,6 +483,62 @@ try {
   check('a done sentinel yields no text', chat.deltaFromEvent('[DONE]') === null);
   check('a delta is extracted from the OpenAI shape', chat.deltaFromEvent('{"choices":[{"delta":{"content":"x"}}]}') === 'x');
   check('a malformed event is ignored, not thrown', chat.deltaFromEvent('not json') === null);
+
+  // --- telling a website apart from a gateway ------------------------------
+  // The bug this pins: pointing the app at omniroute.online (the project's
+  // marketing site) showed a green "signed in" badge and a full-page HTML error
+  // on every screen, because a Next.js 404 page and a gateway route are both
+  // just HTTP responses.
+  const website = await startWebsite();
+  try {
+    const site = createApi({ base: website.base });
+    const siteError = await site.get('/api/providers').then(
+      () => null,
+      (err) => err
+    );
+    check('a website is reported as a website, not as HTTP 404', siteError instanceof ApiError && siteError.notAGateway);
+    check(
+      'the message names the address and says what to do',
+      /answered with a web page, not the gateway API/.test(siteError.message) &&
+        siteError.message.includes('127.0.0.1:20128'),
+      siteError.message
+    );
+    check('no markup leaks into the message', !/<|DOCTYPE|html>/i.test(siteError.message));
+    check(
+      'a landing page with HTTP 200 is not mistaken for an answer either',
+      (() => {
+        // `/` answers 200 with HTML; the client must classify that as a page too.
+        return client.looksLikeHtml('<!DOCTYPE html><html><body>hi</body></html>') === true;
+      })()
+    );
+    check('and a JSON body is not', client.looksLikeHtml('{"ok":true}') === false);
+
+    // The Settings "Test" button used to probe `/` and call any 200 "Online",
+    // which is how a marketing site passed for a gateway.
+    const probe = await gateway.checkGateway(website.base);
+    check(
+      'the connection test does not accept a website as a gateway',
+      probe.ok === false && probe.kind === 'website',
+      JSON.stringify(probe)
+    );
+    check(
+      'the connection test explains it in words',
+      /web page, not the gateway API/.test(probe.detail ?? ''),
+      probe.detail
+    );
+
+    const realProbe = await gateway.checkGateway(base);
+    check('a real gateway still tests as online', realProbe.ok === true && realProbe.kind === 'gateway', JSON.stringify(realProbe));
+
+    const deadProbe = await gateway.checkGateway('127.0.0.1:1');
+    check(
+      'an address with nothing on it says so',
+      deadProbe.ok === false && deadProbe.kind === 'nothing' && /no answer from/.test(deadProbe.detail ?? ''),
+      JSON.stringify(deadProbe)
+    );
+  } finally {
+    website.server.close();
+  }
 
   // --- the engines that draw every dashboard surface -----------------------
   const demo = await session.get('/api/settings/demo');

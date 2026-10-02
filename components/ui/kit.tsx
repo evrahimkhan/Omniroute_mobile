@@ -429,15 +429,27 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorState({
+  message,
+  onRetry,
+  action,
+  title = 'That did not work',
+}: {
+  message: string;
+  onRetry?: () => void;
+  /** A way out of the failure, when retrying is not the answer. */
+  action?: { label: string; icon?: IconName; onPress: () => void };
+  title?: string;
+}) {
   return (
     <View style={styles.stateBox}>
       <MaterialCommunityIcons name="alert-circle-outline" size={40} color={theme.danger} />
-      <Text style={styles.stateTitle}>That did not work</Text>
+      <Text style={styles.stateTitle}>{title}</Text>
       <Text style={styles.stateText}>{message}</Text>
-      {onRetry ? (
+      {onRetry || action ? (
         <View style={styles.stateAction}>
-          <Button label="Try again" icon="refresh" onPress={onRetry} />
+          {onRetry ? <Button label="Try again" icon="refresh" onPress={onRetry} variant={action ? 'secondary' : 'primary'} /> : null}
+          {action ? <Button label={action.label} icon={action.icon ?? 'cog-outline'} onPress={action.onPress} /> : null}
         </View>
       ) : null}
     </View>

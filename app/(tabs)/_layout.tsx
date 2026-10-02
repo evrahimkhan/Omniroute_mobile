@@ -59,7 +59,7 @@ export default function TabsLayout() {
       />
       <Tabs.Screen
         name="more"
-        options={{ title: 'More', tabBarIcon: ({ focused }) => tabIcon('dots-horizontal-circle-outline', focused) }}
+        options={{ title: 'Menu', tabBarIcon: ({ focused }) => tabIcon('dots-horizontal-circle-outline', focused) }}
       />
     </Tabs>
   );

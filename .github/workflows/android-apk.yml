@@ -342,15 +342,26 @@ jobs:
           body: |
             **OmniRoute Mobile for Android**
 
-            A native shell over the [OmniRoute](https://github.com/diegosouzapw/OmniRoute) AI gateway —
-            every dashboard feature (playground, model catalog, providers, compression engines,
-            analytics, logs, settings, …) in one app.
+            A native app for an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway.
+            There is no dashboard and no web view in this build: every screen is React Native,
+            and it talks to the gateway's HTTP API directly.
+
+            ### What is in it
+            - Five tabs: Home (health, traffic), Playground (streaming chat), Models,
+              Providers, and Menu.
+            - The menu covers every function the dashboard has — 94 of them, grouped into nine
+              sections and searchable. Settings open as real switches and pickers, lists as native
+              lists, analytics as figures rather than charts.
+            - Host the gateway on the phone itself: install the payload from inside the app, start
+              it, and keep it running in the background.
+            - Works with a remote gateway too — point it at any reachable address.
 
             ### Install
             1. Download `OmnirouteMobile-v*.apk` below.
             2. Copy it to your phone and open it (allow “install unknown apps”).
-            3. Enter your gateway URL on the first screen (default: `https://omniroute.online`,
-               or your self-hosted gateway built by the **Build OmniRoute source** workflow).
-            4. Sign in to the dashboard once — the session is shared across all features.
+            3. Enter your gateway URL (default: `https://omniroute.online`, or your own gateway
+               built by the **Build OmniRoute source** workflow), or host one on this phone.
+            4. If the gateway asks for a password, sign in once from Settings — the session is
+               kept by the app.
 
             > Signed with the debug key (sideloading). See the repo README for release-key signing.

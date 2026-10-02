@@ -6,13 +6,11 @@
  * by that gateway; this file keeps URLs sane and probes `/healthz`.
  */
 
-export function normalizeServerUrl(raw: string): string {
-  let url = raw.trim();
-  if (!url) return '';
-  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  url = url.replace(/\/+$/, '');
-  return url;
-}
+import { normalizeServerUrl } from './serverUrl';
+
+// The scheme rule lives in lib/serverUrl.ts, where a test exercises it directly
+// (scripts/check-server-url.mjs). Re-exported so callers keep one import.
+export { normalizeServerUrl, repairServerUrl, assumedScheme, isLocalHost } from './serverUrl';
 
 export function gatewayUrl(serverUrl: string, path: string): string {
   const base = normalizeServerUrl(serverUrl);
@@ -56,13 +54,11 @@ export async function checkGateway(serverUrl: string, timeoutMs = 10000): Promis
         if (path === '/') return { ok: false, status: res.status, latencyMs, detail };
       } catch (err) {
         if (path === '/') {
-          return {
-            ok: false,
-            detail:
-              err instanceof Error && err.name === 'AbortError'
-                ? 'Timed out'
-                : 'Network error',
-          };
+          // Name the URL that was tried: "Network error" on its own is what
+          // makes a working gateway look unreachable, and the scheme is the
+          // first thing to question.
+          const why = err instanceof Error && err.name === 'AbortError' ? 'Timed out' : 'Network error';
+          return { ok: false, detail: `${why} — no answer from ${base}` };
         }
       }
     }

@@ -1052,6 +1052,33 @@ logged when the directory had to be made, so later boots say nothing about it.
 The e2e test boots a payload with an empty `HOME` and asserts both the directory
 and the line.
 
+### 5s. What URL the app uses, and why the scheme is not a detail
+
+The gateway on this phone listens on `http://127.0.0.1:20128`. The app's gateway
+field accepts a bare address — `127.0.0.1:20128`, `192.168.1.10:20128`, a
+tunnel domain — and until this rule existed, anything without a scheme was given
+`https://`. That turned the one address that always works into one that never
+can: the request dies in the TLS handshake, `fetch` reports
+`Network error`, Android's WebView reports `ERR_SSL_PROTOCOL_ERROR`, and the
+gateway log shows nothing at all, because nothing arrived. The failure is
+indistinguishable from "the gateway is down" — while the gateway is right there,
+logging its own startup.
+
+So the scheme follows the host (`lib/serverUrl.ts`, tested by
+`scripts/check-server-url.mjs`):
+
+- loopback (`127.0.0.1`, `localhost`, `[::1]`), the RFC 1918 ranges, link-local,
+  mDNS/`.lan`/`.home.arpa` names, and single-label hostnames → **http**;
+- anything else — a domain, a tunnel — → **https**;
+- an explicit scheme is always kept, so an https gateway on the LAN still works
+  if that is what you run.
+
+Two smaller things follow from the same principle. A probe that fails now names
+the URL it tried (`Network error — no answer from http://127.0.0.1:20128`)
+instead of leaving you to guess which scheme it used. And a URL *already saved*
+as https-to-loopback is repaired when settings load, because the screen that
+would let you fix it sits behind the gate that URL cannot pass.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

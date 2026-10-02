@@ -18,6 +18,7 @@
     "runtime:contract": "node scripts/check-runtime-contract.mjs",
     "gateway:embed": "node scripts/embed-gateway-bootstrap.mjs",
     "gateway:test": "node scripts/check-gateway-log.mjs",
+    "url:test": "node scripts/check-server-url.mjs",
     "payload:pack": "node scripts/pack-payload.mjs",
     "payload:test": "node scripts/check-payload-pack.mjs",
     "payload:install-test": "node scripts/check-payload-install.mjs"

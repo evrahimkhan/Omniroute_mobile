@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { repairServerUrl } from './serverUrl';
+
 export interface Settings {
   /** Base URL of the OmniRoute gateway (no trailing slash). */
   serverUrl: string;
@@ -27,10 +29,16 @@ export function useSettings() {
         const raw = await AsyncStorage.getItem(KEY);
         if (alive && raw) {
           const parsed = JSON.parse(raw) as Partial<Settings>;
-          setSettings({
-            serverUrl: parsed.serverUrl || DEFAULT_SERVER_URL,
-            configured: Boolean(parsed.configured),
-          });
+          const configured = Boolean(parsed.configured);
+          // Repair on the way in: a URL stored before the scheme rule existed
+          // (https to loopback) can never work, and the screen that would let
+          // you fix it sits behind the gate that URL cannot pass.
+          const saved = parsed.serverUrl || DEFAULT_SERVER_URL;
+          const serverUrl = repairServerUrl(saved);
+          setSettings({ serverUrl, configured });
+          if (serverUrl !== saved) {
+            AsyncStorage.setItem(KEY, JSON.stringify({ serverUrl, configured })).catch(() => {});
+          }
         }
       } catch {
         // Corrupt storage — fall through to defaults.

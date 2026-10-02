@@ -60,21 +60,26 @@ export default function HomeScreen() {
   }
 
   if (health.error && !health.data) {
-    // If the address answered with a web page, retrying will not help: the fix
-    // is a different address, so the second button goes there instead.
+    // Three failures deserve three different next steps, and "Try again" is only
+    // the right one for two of them:
+    //   - a web page came back  → the address is a website (see lib/api/client.ts)
+    //   - nothing answered, and the address is this phone → the gateway is not
+    //     installed yet, which is a setup step rather than a fault
+    //   - nothing else answered → the address, the network or the gateway is down
     const wrongAddress = /web page|not a gateway/i.test(health.error);
+    const localGateway = /127\.0\.0\.1|localhost/i.test(settings.serverUrl ?? '');
+    const nothingThere = /no answer from|Network error|Timed out/i.test(health.error);
+
+    const title = wrongAddress ? 'This address is not a gateway' : nothingThere && localGateway ? 'No gateway on this phone yet' : undefined;
+    const action = wrongAddress
+      ? { label: 'Change the address', icon: 'cog-outline' as const, onPress: () => router.push('/settings') }
+      : nothingThere && localGateway
+        ? { label: 'Install it here', icon: 'download' as const, onPress: () => router.push('/settings') }
+        : { label: 'Gateway settings', icon: 'cog-outline' as const, onPress: () => router.push('/settings') };
+
     return (
       <Screen>
-        <ErrorState
-          message={health.error}
-          title={wrongAddress ? 'This address is not a gateway' : undefined}
-          onRetry={reloadAll}
-          action={
-            wrongAddress
-              ? { label: 'Gateway settings', icon: 'cog-outline', onPress: () => router.push('/settings') }
-              : undefined
-          }
-        />
+        <ErrorState message={health.error} title={title} onRetry={reloadAll} action={action} />
       </Screen>
     );
   }

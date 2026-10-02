@@ -13,10 +13,11 @@
 #      and boots both payload shapes over loopback — the chain the phone runs)
 #   8. npm run runtime:contract  (the JS, Kotlin and manifest surfaces agree)
 #   9. npm run url:test      (a bare `192.168.1.10:20128` is not https)
-#  10. npm run api:test      (the native client against a real fake gateway:
+#  10. npm run surfaces:test (the generated catalog matches its snapshot)
+#  11. npm run api:test      (the native client against a real fake gateway:
 #      URL rules, session cookie, error surfaces, SSE chat, and the invariant
 #      that no screen renders a WebView and every menu entry is a real screen)
-#  11. expo export           (Metro/Hermes bundle → proves routing + imports)
+#  12. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -106,6 +107,12 @@ jobs:
       # reads the wrong field is a blank page on a phone with no console — so
       # the client is exercised against a server that answers the way the
       # gateway really does, including the shapes that have already bitten.
+      # The catalog is generated from the dashboard's own definition, so it can
+      # be regenerated and compared: if the snapshot and lib/screens/catalog.ts
+      # disagree, one of them was edited without the other.
+      - name: Check the surface catalog is current
+        run: npm run surfaces:test
+
       - name: Check the native gateway client
         run: npm run api:test
 

@@ -2,91 +2,99 @@
 
 The app used to be a shell around a `WebView` showing the gateway's dashboard.
 It is now a phone app: native screens over the gateway's HTTP API, with no web
-view anywhere in the process. This document is the migration record — what moved,
-what is still dashboard-only and why, and how the claim is checked.
+view anywhere in the process. This document is the migration record — what is
+native, how the whole dashboard was covered without writing ninety screens by
+hand, and how the claim is checked.
 
 The rule the rewrite is built on: **a surface is either a real native screen or it
-is honestly absent.** Nothing here lists a feature that secretly opens a web page,
+says why it is not.** Nothing here lists a feature that secretly opens a web page,
 because a dead-end row is worse than a missing one — it hides where the app's
 coverage actually ends.
 
-## The shape
+## How many surfaces, and what happened to each
 
-Five native tabs, plus routes pushed on top of them:
+The dashboard's sidebar is the product's own definition of "every function". It
+has 95 entries, of which 93 are gateway surfaces (the other two are external
+links). The app now covers all 93:
 
-| Tab | Screen | What it is |
+| Kind | Count | What it means |
 | --- | --- | --- |
-| Home | `app/(tabs)/index.tsx` | Health, uptime, memory, error rate, providers on, recent requests |
-| Playground | `app/(tabs)/chat.tsx` | Streaming chat against any connected model |
-| Models | `app/(tabs)/models.tsx` | The whole catalog, searchable and filterable |
-| Providers | `app/(tabs)/providers.tsx` | Every connection, with on/off |
-| More | `app/(tabs)/more.tsx` | Searchable catalog of the app's own screens + About |
+| `custom` | 7 | A purpose-built screen (Home, Playground, Models, Providers, API keys, Combos, Logs) |
+| `config` | 35 | A settings object: native switches, fields and pickers, written back on change |
+| `collection` | 32 | A list of records: search, rows, badges, a detail sheet |
+| `stats` | 14 | Numbers: metric tiles, ranked breakdowns, key/value groups |
+| `local` | 4 | Not gateway data — the screen explains why (e.g. the dashboard's own theme) |
+| `external` | 2 | A link out of the app, opened only when tapped |
 
-Pushed routes: `/keys`, `/logs`, `/combos`, `/settings`, `/sign-in`.
+Ninety-three surfaces, seven of them written by hand. The other eighty-six are
+drawn by three renderers over the gateway's own API, which is what makes the
+coverage honest rather than aspirational: there is no page in the dashboard that
+the app cannot open, and no page the app fakes.
 
-The UI kit (`components/ui/kit.tsx`, `Sheet.tsx`, `Toast.tsx`) is a handful of
-primitives — Screen, Card, ListRow, StatTile, Badge, Chip, Button, Field,
-SearchField, ToggleRow, KeyValue, the loading/empty/error states, a bottom sheet,
-a promise-based `confirm`, a `PromptSheet` and a toast queue. It depends only on
-React Native primitives, `@expo/vector-icons` and `lib/theme.ts`, so there is no
-UI framework to keep in step with Expo.
+## The three renderers
 
-## Migration table
+`lib/screens/catalog.ts` decides which one draws a surface. It is **generated**
+(`scripts/gen-surface-catalog.mjs`) from `scripts/data/dashboard-surfaces.json`,
+which is derived from the gateway's own sources — `sidebarVisibility/sections.ts`
+for the grouping and labels, and the `/api` route each dashboard page calls,
+followed through its imports. `npm run surfaces:test` fails if the catalog and
+the snapshot disagree, so the table cannot drift silently.
 
-Nine dashboard surfaces exist as native screens. The rest are grouped below with
-the reason they stayed; the full 94-item dashboard navigation that used to live in
-`lib/features.ts` is the reference list.
+### `config` — settings as switches, not JSON
 
-### Moved
+The dashboard's settings pages are, over and over, a client component that
+fetches one object and PATCHes parts of it back. Some routes are even
+**self-describing**: they return `{key, label, description, type, enumValues,
+effectiveValue, requiresRestart, source}` per setting, which *is* a form spec.
+`lib/api/config.ts` reads that first, then falls back to inferring fields from
+the payload's own types, and the screen draws:
 
-| Dashboard surface | Native screen | Gateway API |
-| --- | --- | --- |
-| Overview / Health / Runtime | Home (`/(tabs)`) | `GET /api/health`, `GET /api/telemetry/summary?windowMs=` |
-| Providers | Providers (`/(tabs)/providers`) | `GET /api/providers`, `PATCH /api/providers {ids,isActive}` |
-| Model Catalog | Models (`/(tabs)/models`) | `GET /api/models?all=true` |
-| API Keys | `/keys` | `GET/POST /api/keys`, `DELETE /api/keys/:id` |
-| Logs (request log) | `/logs` | `GET /api/usage/call-logs?search=&status=&limit=` |
-| Playground | Playground (`/(tabs)/chat`) | `POST /v1/chat/completions` (fallback `/api/v1/...`), SSE |
-| Combos (view) | `/combos` | `GET /api/combos` |
-| Settings (connection) | `/settings` | `GET /api/auth/status`; local URL from the embedded runtime |
-| Security (session) | `/sign-in` | `POST /api/auth/login`, `POST /api/auth/logout` |
-| Sidebar / navigation | More (`/(tabs)/more`) | none — it is the app's own index |
+- booleans as switches, `enumValues` as chip pickers, numbers as numeric fields,
+  long strings as multi-line fields, everything else as read-only text;
+- a "needs a restart" note and "from env" provenance where the route reports it;
+- a save bar that appears only when something changed, and sends **only the
+  changed keys**, nested back into the shape the route expects (`cache.ttl` →
+  `{cache:{ttl}}`). Echoing the whole object back would make the app responsible
+  for fields it never displayed.
 
-### Deliberately not moved
+A settings payload that mixes described flags with plain settings gets both:
+flags grouped by their own `category`, plain keys underneath.
 
-| Dashboard area | Examples | Why, and what it would take |
-| --- | --- | --- |
-| Combo authoring | Combo Studio, Engine Combos | The builder is ordering, conditions and per-member weights across a canvas. A cut-down list editor would either write wrong combos or refuse most of what the dashboard can express. Read-only view shipped instead. |
-| Context compression | Headroom, CCR, LLMLingua, Caveman, RTK, Session Dedup, Ultra | Eleven tuners whose effects are measured elsewhere (Compression analytics). Each is a form over config with no feedback loop on a phone. |
-| Routing and resilience | Global Routing, Resilience, Advanced, Feature Flags | High-blast-radius settings: a wrong routing rule sends every request to the wrong provider. Needs the dashboard's validation context and history. |
-| Provider onboarding | 358-provider directory, OAuth flows, quotas, free-tier rankings, Radar | Adding a provider is an interactive OAuth/credential dance in a browser tab. The app shows the result — a provider appears in the list and can be switched on or off. |
-| CLI / agent surfaces | CLI Code, CLI Agents, ACP/Cloud Agents, Conductor, Orchestration, Agent Bridge | These manage processes that do not run on the phone. |
-| Analytics and cost | Usage, Combo Health, Utilization, Cache, Search, Evals, Costs, Pricing, Budget | Chart-heavy and read-mostly; the parts a phone needs (error rate, recent calls, tokens, cost) are already on Home and Logs. |
-| Observability beyond requests | Console, Timeline, Proxy Logs, Conversations, Audit, MCP/A2A Audit, Translator | Streaming text views with long rows; the request log covers the common question ("did my call work, and why not"). |
-| Content and account | Media, Batch Jobs, Files, Memory, AgentSkills, OmniSkills, MCP/A2A Server, Plugins, Leaderboard, Profile, Tokens, Gamification | Not phone-shaped, or account management that is naturally done once at a desk. |
-| Appearance and storage | Storage, Appearance, Sidebar, Cache | Cosmetic or device-local to the dashboard's own host. |
+### `collection` — lists from what the payload actually is
 
-The dashboard remains the place to configure those, and the app never opens it —
-that was the point of the rewrite. Reaching it deliberately means opening the
-gateway's address in a browser.
+Rows are described by the payload, not by a per-screen schema: a title from the
+first human-looking field (`name`, `model`, `provider`, `message`, …), state as
+badges (a `status` word, or booleans like `enabled`/`healthy`), and every other
+scalar in a detail sheet. Values under secret-looking keys (`apiKey`, `token`,
+`authorization`) are masked before they reach the screen — a screenshot should
+not leak a key. Wrapper shapes (`{keys:[…]}`, `{items:[…]}`, a bare array) and a
+single-object status route all produce something readable.
 
-## The client
+### `stats` — numbers without the charts
 
-Everything a screen does goes through `lib/api/`:
+The analytics pages are chart-heavy in the browser. A phone needs the figure, what
+it is made of, and which entries dominate: metrics are formatted by what their key
+says they are (bytes, durations, fractions, currency), arrays of records become
+proportional ranked bars, and nested objects become key/value groups. `parseStats`
+is pure and lives in `lib/screens/stats.ts` so it can be tested without a
+renderer — a wrong number is worse than no number.
 
-- `client.ts` — `apiRequest`/`createApi` with a 15-second timeout, query building,
-  and three error kinds the UI can act on: needs-a-session, unreachable (names the
-  URL it tried, and how long it waited) and timed out. Upstream messages are read
-  from `{error:{message}}`, `{error}` and `{message}`.
-- `shape.ts` — tolerant readers. The gateway is a moving target with several
-  response shapes per route, so readers return `undefined` rather than inventing a
-  default: a blank cell is honest, a wrong number is not.
-- `resources.ts` — view models and requests for health, telemetry, providers,
-  models, keys, combos and call logs.
-- `chat.ts` — an SSE decoder (pure and exported for tests) plus a streaming client
-  that probes `/v1/chat/completions` once, remembers the answer, and degrades to a
-  non-streaming call when the runtime gives no readable body.
-- `auth.ts`, `context.tsx` — the session and the providers/hooks screens use.
+## What changed in the app shell
+
+Five native tabs plus pushed routes. The catalog lives in the **More** tab: the
+same grouping the dashboard's sidebar uses, searchable across titles, subtitles
+and API routes, with a per-section count. Every entry opens `/surface/[id]`,
+which looks the surface up and renders it — one route, not ninety files.
+
+Screens built for this refactor: Home (health, telemetry, providers, recent
+calls), Playground (streaming chat with Stop), Models (searchable catalog),
+Providers (search, filter, on/off), More (the catalog), `/keys`, `/logs`,
+`/combos`, `/settings`, `/sign-in`, and the generic `/surface/[id]`.
+
+`components/ui/` is a small native kit (cards, rows, chips, sheets, a toast queue,
+real loading/empty/error states); `lib/api/` is the client, including a 15-second
+timeout, errors classified as needs-sign-in / unreachable / timed-out, and an SSE
+chat decoder.
 
 Two behaviours worth knowing, both learned the hard way:
 
@@ -101,29 +109,44 @@ Two behaviours worth knowing, both learned the hard way:
 
 ## Verification
 
-`npm run api:test` (61 assertions) compiles the real client and runs it against a
+`npm run api:test` (95 assertions) compiles the real client and runs it against a
 fake gateway on loopback — a real HTTP server, not a stubbed fetch. It covers URL
-building (`192.168.1.10:20128` is `http`, not `https`), each reader against the
-shapes the gateway actually returns, the error surfaces above, cookie capture and
-replay, mid-UTF-8 SSE chunk splitting, and the path fallback.
+building (`192.168.1.10:20128` is `http`, not `https`), the readers, the error
+surfaces, cookie capture and replay, mid-UTF-8 SSE chunk splitting, chat path
+fallback, and then the surfaces themselves: a self-describing settings route
+becoming switches and pickers, partial saves being nested correctly, list rows
+with masked secrets and honest badges, and statistics parsed into metrics and
+ranked breakdowns.
 
-It also asserts the migration itself, so the rewrite cannot quietly regress:
+It also asserts the migration itself, so it cannot quietly regress:
 
 - no file under `app/`, `components/` or `lib/` imports a web view;
 - `react-native-webview` is not a dependency;
 - `lib/webData.ts`, `lib/features.ts` and `app/feature/` do not exist;
-- every one of the ten destinations in `lib/destinations.ts` resolves to a screen
-  file that exists.
+- every custom surface's route resolves to a file, every fetching surface names
+  an `/api/…` route, every `local` surface explains itself, and the sections
+  partition the catalog without losing an entry.
 
-`npm run api:test` runs in the App CI workflow alongside the typecheck and the
-Metro bundle, so a screen that imports a missing module or a menu entry that points
-at a deleted route fails CI rather than a phone.
+`npm run surfaces:test` verifies the generated catalog against its snapshot. Both
+run in App CI with the typecheck and the Metro bundle, so a surface pointing at a
+route that no longer exists fails CI rather than a phone.
+
+### Regenerating the catalog
+
+When the pinned OmniRoute ref moves, the snapshot needs refreshing. The analysis
+tool is not committed (it needs a checkout of the upstream source), so the
+procedure is: clone upstream, run the analysis over `src/app`, `src/shared` and
+`src/i18n`, review the picks it cannot know (routes reached through shared hooks,
+surfaces that are not gateway data), write `scripts/data/dashboard-surfaces.json`,
+then `npm run surfaces:test` to regenerate and verify. The snapshot records the
+version it came from in its `source` field — currently `release/v3.8.52`.
 
 ## Not yet proven on hardware
 
 Nothing has been built since b60, so the native screens have not run on a device.
 When a build exists, the checks that matter are: the tab bar renders and each tab
-loads against a local gateway; the Playground streams and Stop actually aborts; the
-keys sheet copies a secret to the clipboard; Logs filters server-side; and the app
-still shows a legible message with the gateway stopped and with it started but the
-phone in flight mode.
+loads against a local gateway; the Playground streams and Stop actually aborts;
+the keys sheet copies a secret to the clipboard; Logs filters server-side; a
+`config` surface saves one toggle and the gateway's dashboard shows the same
+value; a `collection` surface opens a record; and the app still shows a legible
+message with the gateway stopped and with the phone in flight mode.

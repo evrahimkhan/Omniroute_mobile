@@ -20,6 +20,7 @@
     "gateway:test": "node scripts/check-gateway-log.mjs",
     "url:test": "node scripts/check-server-url.mjs",
     "api:test": "node scripts/check-api-client.mjs",
+    "surfaces:test": "node scripts/gen-surface-catalog.mjs --check",
     "payload:pack": "node scripts/pack-payload.mjs",
     "payload:test": "node scripts/check-payload-pack.mjs",
     "payload:install-test": "node scripts/check-payload-install.mjs"

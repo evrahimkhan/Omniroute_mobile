@@ -59,6 +59,11 @@ function compile() {
       'lib/api/shape.ts',
       'lib/api/resources.ts',
       'lib/api/chat.ts',
+      'lib/api/config.ts',
+      'lib/api/collection.ts',
+      'lib/screens/format.ts',
+      'lib/screens/stats.ts',
+      'lib/screens/catalog.ts',
       '--outDir',
       out,
       '--module',
@@ -207,6 +212,75 @@ function startGateway() {
       });
     }
 
+    // A self-describing settings route, the shape the dashboard's own settings
+    // pages read: each entry carries its label, type and enum values.
+    if (path === '/api/settings/demo' && req.method === 'GET') {
+      return json(200, {
+        revision: 12,
+        flags: [
+          {
+            key: 'ENABLE_STREAMING',
+            label: 'Streaming responses',
+            description: 'Send deltas as they arrive',
+            category: 'Transport',
+            type: 'boolean',
+            enumValues: null,
+            defaultValue: 'true',
+            effectiveValue: 'false',
+            source: 'db',
+            requiresRestart: true,
+          },
+          {
+            key: 'LOG_LEVEL',
+            label: 'Log level',
+            category: 'Transport',
+            type: 'enum',
+            enumValues: ['debug', 'info', 'warn', 'error'],
+            effectiveValue: 'info',
+            source: 'env',
+          },
+        ],
+        cache: { enabled: true, ttlSeconds: 300 },
+        displayName: 'Demo gateway',
+      });
+    }
+    if (path === '/api/settings/demo' && req.method === 'PATCH') {
+      return collect(() => json(200, { ok: true }));
+    }
+
+    // A list route with the awkward bits: a wrapper key, a secret, a status word.
+    if (path === '/api/audit') {
+      return json(200, {
+        total: 2,
+        items: [
+          {
+            id: 'a1',
+            name: 'key.created',
+            status: 'success',
+            enabled: true,
+            apiKey: 'omni_live_deadbeefdeadbeef',
+            createdAt: '2026-10-02T09:00:00.000Z',
+          },
+          { id: 'a2', name: 'login.failed', status: 'error', enabled: false, actor: 'me@example.com' },
+        ],
+      });
+    }
+
+    // A numbers route, as the analytics pages see them.
+    if (path === '/api/usage/demo') {
+      return json(200, {
+        uptime: 7_200_000,
+        totalRequests: 15_234,
+        errorRate: 0.031,
+        byProvider: [
+          { provider: 'openai', requests: 9_000, errors: 12 },
+          { provider: 'anthropic', requests: 5_000, errors: 4 },
+          { provider: 'google', requests: 1_234, errors: 0 },
+        ],
+        window: '24h',
+      });
+    }
+
     json(404, { error: 'no such route' });
   });
 
@@ -224,6 +298,10 @@ const { createApi, apiRequest, ApiError, buildQuery, resolveUrl } = require(join
 const shape = require(join(out, 'api', 'shape.js'));
 const resources = require(join(out, 'api', 'resources.js'));
 const chat = require(join(out, 'api', 'chat.js'));
+const config = require(join(out, 'api', 'config.js'));
+const collection = require(join(out, 'api', 'collection.js'));
+const format = require(join(out, 'screens', 'format.js'));
+const catalog = require(join(out, 'screens', 'catalog.js'));
 
 const { server, requests, base } = await startGateway();
 
@@ -376,6 +454,95 @@ try {
   check('a done sentinel yields no text', chat.deltaFromEvent('[DONE]') === null);
   check('a delta is extracted from the OpenAI shape', chat.deltaFromEvent('{"choices":[{"delta":{"content":"x"}}]}') === 'x');
   check('a malformed event is ignored, not thrown', chat.deltaFromEvent('not json') === null);
+
+  // --- the engines that draw every dashboard surface -----------------------
+  const demo = await session.get('/api/settings/demo');
+  const groups = config.configGroups(demo);
+  check('a self-describing settings route becomes native fields', groups.length >= 2);
+  const flagGroup = groups.find((group) => group.title === 'Transport');
+  check('fields are grouped by the category the route declares', Boolean(flagGroup));
+  const streaming = flagGroup.fields.find((field) => field.key === 'ENABLE_STREAMING');
+  check('a described boolean becomes a switch', streaming.type === 'boolean' && streaming.value === false);
+  check('a described enum becomes a picker', flagGroup.fields.find((f) => f.key === 'LOG_LEVEL').options.length === 4);
+  check('the route’s own label and help text are used', streaming.label === 'Streaming responses' && Boolean(streaming.description));
+  check('a restart requirement is carried through', streaming.requiresRestart === true);
+  check('the effective value is the one shown, not the default', streaming.value === false);
+  check(
+    'a plain settings object still yields editable fields',
+    config.configGroups({ cache: { enabled: true, ttlSeconds: 300 } }).some((group) =>
+      group.fields.some((field) => field.key === 'cache.ttlSeconds' && field.type === 'number')
+    )
+  );
+  check(
+    'dotted edits are rebuilt as nested objects',
+    JSON.stringify(config.nestChanges({ 'cache.ttlSeconds': 60 })) === JSON.stringify({ cache: { ttlSeconds: 60 } })
+  );
+  await config.saveConfig(session, '/api/settings/demo', { 'cache.ttlSeconds': 60 }, 'patch');
+  const savedBody = requests.at(-1).body;
+  check(
+    'saving sends only what changed',
+    Object.keys(savedBody).length === 1 && savedBody.cache.ttlSeconds === 60,
+    JSON.stringify(savedBody)
+  );
+
+  const audit = collection.normalizeCollection(await session.get('/api/audit'));
+  check('a wrapped list becomes rows', audit.rows.length === 2 && audit.total === 2);
+  check('a row is titled by its most human field', audit.rows[0].title === 'key.created');
+  check('state becomes badges', audit.rows[0].badges.some((badge) => badge.label === 'success' && badge.tone === 'ok'));
+  check('a failure is badged as one', audit.rows[1].badges.some((badge) => badge.tone === 'danger'));
+  check(
+    'a secret is never rendered',
+    audit.rows[0].values.every((value) => !value.value.includes('deadbeef')) &&
+      audit.rows[0].values.some((value) => value.value === '••••••')
+  );
+  check('timestamps are shown as a time, not ISO', /Sep|Oct/.test(audit.rows[0].values.map((v) => v.value).join(' ')));
+  check(
+    'a single object still produces a row',
+    collection.normalizeCollection({ status: 'ok', version: '3.8.52' }).rows.length === 1
+  );
+
+  const stats = require(join(out, 'screens', 'stats.js'));
+  const parsed = stats.parseStats(await session.get('/api/usage/demo'));
+  check('numbers become metrics', parsed.metrics.some((metric) => metric.label === 'Total requests'));
+  check('a duration is formatted as one', parsed.metrics.some((metric) => metric.value === '2h 0m'));
+  check('a fraction becomes a percentage', parsed.metrics.some((metric) => metric.value === '3.1%'));
+  check('an array of records becomes a ranked breakdown', parsed.breakdowns.length === 1 && parsed.breakdowns[0].rows[0].label === 'openai');
+  check('the biggest entry is first', parsed.breakdowns[0].rows[0].value === 9000);
+  check('the breakdown names the metric it ranked', /Requests/.test(parsed.breakdowns[0].title));
+
+  check('keys are humanised for display', format.humanizeKey('enableStreaming') === 'Enable streaming');
+  check('acronyms stay upper case', format.humanizeKey('ttlSeconds') === 'TTL seconds');
+  check('secret-looking keys are recognised', format.isSecretKey('apiKey') && format.isSecretKey('authorization') && !format.isSecretKey('model'));
+  check('bytes and durations format like the rest of the app', format.formatBytes(268_435_456) === '256 MB' && format.formatDuration(7_200_000) === '2h 0m');
+
+  // --- the catalog that replaces the dashboard's 94 entries ----------------
+  check(`the catalog covers every dashboard surface (${catalog.SURFACES.length})`, catalog.SURFACES.length >= 90);
+  const kinds = new Set(catalog.SURFACES.map((surface) => surface.kind));
+  check(
+    'every surface has a kind the app can render',
+    [...kinds].every((kind) => ['custom', 'config', 'collection', 'stats', 'local', 'external'].includes(kind)),
+    [...kinds].join(', ')
+  );
+  const needsApi = catalog.SURFACES.filter((s) => ['config', 'collection', 'stats'].includes(s.kind));
+  check(
+    `every fetched surface (${needsApi.length}) names a gateway route`,
+    needsApi.every((surface) => typeof surface.path === 'string' && surface.path.startsWith('/api/')),
+    needsApi.filter((s) => !s.path?.startsWith('/api/')).map((s) => s.id).join(', ')
+  );
+  check(
+    'surfaces that fetch nothing explain themselves',
+    catalog.SURFACES.filter((s) => ['local'].includes(s.kind)).every((surface) => Boolean(surface.note))
+  );
+  const customSurfaces = catalog.SURFACES.filter((s) => s.kind === 'custom');
+  check(
+    `every bespoke surface (${customSurfaces.length}) has a route in the app`,
+    customSurfaces.every((surface) => typeof surface.route === 'string' && surface.route.length > 1)
+  );
+  check(
+    'sections partition the catalog without losing a surface',
+    catalog.SECTIONS.reduce((count, section) => count + section.surfaces.length, 0) === catalog.SURFACES.length
+  );
+  check('search finds a surface by its route', catalog.searchSurfaces('audit').length > 0 && catalog.searchSurfaces('zzzz').length === 0);
 
   // --- the invariant: nothing renders a web view ---------------------------
   const walk = (dir) =>

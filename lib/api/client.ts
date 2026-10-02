@@ -235,6 +235,8 @@ export interface Api {
   get<T>(path: string, options?: RequestOptions): Promise<T>;
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
+  /** Some settings routes accept PUT only; sending PATCH would be ignored. */
+  put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   del<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   /** Underlying options, for callers that need the raw request (streaming). */
   readonly options: ApiOptions;
@@ -250,6 +252,7 @@ export function createApi(options: ApiOptions): Api {
     get: (path, extra) => call('GET', path, undefined, extra),
     post: (path, body, extra) => call('POST', path, body, extra),
     patch: (path, body, extra) => call('PATCH', path, body, extra),
+    put: (path, body, extra) => call('PUT', path, body, extra),
     del: (path, body, extra) => call('DELETE', path, body, extra),
   };
 }

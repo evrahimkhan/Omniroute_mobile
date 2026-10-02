@@ -8,6 +8,14 @@ export interface Settings {
   serverUrl: string;
   /** Whether the user has explicitly saved a gateway. */
   configured: boolean;
+  /**
+   * An OmniRoute API key, sent as a bearer token.
+   *
+   * Needed only when the gateway is not trusted as local: a LAN or tunnel
+   * address is treated as a remote client and must authenticate. Loopback does
+   * not need one, which is why this is optional.
+   */
+  apiToken?: string;
 }
 
 export const DEFAULT_SERVER_URL = 'https://omniroute.online';
@@ -35,9 +43,11 @@ export function useSettings() {
           // you fix it sits behind the gate that URL cannot pass.
           const saved = parsed.serverUrl || DEFAULT_SERVER_URL;
           const serverUrl = repairServerUrl(saved);
-          setSettings({ serverUrl, configured });
+          setSettings({ serverUrl, configured, apiToken: parsed.apiToken });
           if (serverUrl !== saved) {
-            AsyncStorage.setItem(KEY, JSON.stringify({ serverUrl, configured })).catch(() => {});
+            AsyncStorage.setItem(KEY, JSON.stringify({ serverUrl, configured, apiToken: parsed.apiToken })).catch(
+              () => {}
+            );
           }
         }
       } catch {

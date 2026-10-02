@@ -1,34 +1,43 @@
-import React, { useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { openURL } from 'expo-linking';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
-import { clearWebViewData } from '../lib/webData';
-import LocalGatewayCard from '../components/LocalGatewayCard';
 
+import LocalGatewayCard from '../components/LocalGatewayCard';
+import ScreenHeader from '../components/ScreenHeader';
+import { Button, Card, Field, ListRow, Screen, SectionHeader } from '../components/ui/kit';
+import { useToast } from '../components/ui/Toast';
+import { describeError, useApiContext } from '../lib/api/context';
 import { checkGateway, normalizeServerUrl } from '../lib/gateway';
 import { useSettings } from '../lib/useSettings';
 import { theme } from '../lib/theme';
 
-const OMNIROUTE_REPO = 'https://github.com/diegosouzapw/OmniRoute';
-
+/**
+ * Settings — natively, and without the WebView it used to clear.
+ *
+ * Three things live here: where the gateway is (including hosting it on this
+ * phone), how the app authenticates to it, and what the app is. The old version
+ * also offered "clear dashboard cookies & cache", which cleared a web view this
+ * app no longer has — the equivalent now is the session, and that is a sign-out.
+ */
 export default function SettingsScreen() {
-  const { settings, save, reset } = useSettings();
+  const { settings, save, reset, loaded } = useSettings();
+  const { session } = useApiContext();
+  const { showToast } = useToast();
+
   const [url, setUrl] = useState(settings.serverUrl);
+  const [token, setToken] = useState(settings.apiToken ?? '');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [clearing, setClearing] = useState(false);
+  const [savingToken, setSavingToken] = useState(false);
+
+  // The stored value arrives asynchronously; without this the field can show the
+  // default gateway and Save would then silently switch the app to it.
+  useEffect(() => {
+    if (loaded) setUrl(settings.serverUrl);
+  }, [loaded, settings.serverUrl]);
 
   const appVersion = (Constants.expoConfig?.version as string | undefined) ?? '1.0.0';
 
@@ -39,44 +48,41 @@ export default function SettingsScreen() {
     setTestResult(null);
     const res = await checkGateway(target);
     setTesting(false);
-    if (res.ok) {
-      setTestResult(`Online — HTTP ${res.status} in ${res.latencyMs ?? '?'} ms`);
-    } else {
-      setTestResult(`Unreachable — ${res.detail ?? `HTTP ${res.status ?? '?'}`}`);
-    }
+    setTestResult(
+      res.ok ? `Online — HTTP ${res.status} in ${res.latencyMs ?? '?'} ms` : `Unreachable — ${res.detail ?? ''}`
+    );
   };
 
   const saveServer = async () => {
     const target = normalizeServerUrl(url);
     if (!target) return;
-    await save({ serverUrl: target, configured: true });
+    await save({ ...settings, serverUrl: target, configured: true });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    Alert.alert('Gateway saved', `Connected to ${target}`);
+    showToast(`Gateway saved: ${target}`, 'ok');
   };
 
-  const usePublic = async () => {
-    setUrl('https://omniroute.online');
-    setTestResult(null);
+  const saveToken = async () => {
+    setSavingToken(true);
+    try {
+      await save({ ...settings, apiToken: token.trim() || undefined });
+      showToast(token.trim() ? 'API token saved' : 'API token cleared', 'ok');
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    } finally {
+      setSavingToken(false);
+    }
   };
 
-  /**
-   * Point the app at the gateway that is running on this phone. The URL comes
-   * from the installer only after it has answered `/healthz`, so this saves a
-   * gateway that is known to be up.
-   */
   const useLocal = async (localUrl: string) => {
     setUrl(localUrl);
     setTestResult(null);
-    await save({ serverUrl: localUrl, configured: true });
+    await save({ ...settings, serverUrl: localUrl, configured: true });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    Alert.alert(
-      'Using the local gateway',
-      `The dashboard now loads from ${localUrl}, served by this phone.`,
-    );
+    showToast('Using the gateway running on this phone', 'ok');
   };
 
   const changeServer = () => {
-    Alert.alert('Change gateway', 'Reset the app and point it at another OmniRoute gateway?', [
+    Alert.alert('Reset the app?', 'Forget the saved gateway and start over from the connection screen.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Reset',
@@ -88,265 +94,119 @@ export default function SettingsScreen() {
     ]);
   };
 
-  const clearData = () => {
-    Alert.alert(
-      'Clear gateway data',
-      'Removes all cookies and cache used by the dashboard (you will need to sign in again).',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: async () => {
-            setClearing(true);
-            try {
-              clearWebViewData();
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-                () => {},
-              );
-            } catch {
-              // Platform without WebViewCache — nothing to clear.
-            } finally {
-              setClearing(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={styles.backBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <MaterialCommunityIcons name="arrow-left" size={24} color={theme.text} />
-        </Pressable>
-        <Text style={styles.headerTitle}>Settings</Text>
-        <View style={styles.backBtn} />
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.cardTitle}>LOCAL GATEWAY</Text>
+      <ScreenHeader title="Settings" subtitle={settings.serverUrl} />
+      <Screen scroll>
+        <SectionHeader title="LOCAL GATEWAY" />
         <LocalGatewayCard onUse={useLocal} />
 
-        <Text style={styles.cardTitle}>GATEWAY</Text>
-        <View style={styles.card}>
-          <Text style={styles.fieldLabel}>Server URL</Text>
-          <TextInput
-            style={styles.input}
-            value={url}
-            onChangeText={(t) => {
-              setUrl(t);
-              setTestResult(null);
-            }}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            placeholder="https://omniroute.online"
-            placeholderTextColor={theme.textMuted}
-            returnKeyType="done"
+        <SectionHeader title="GATEWAY ADDRESS" />
+        <Card>
+          <View style={styles.cardBody}>
+            <Field
+              label="Server URL"
+              value={url}
+              onChange={(next) => {
+                setUrl(next);
+                setTestResult(null);
+              }}
+              placeholder="http://127.0.0.1:20128"
+              keyboardType="url"
+              hint="A bare address gets http on loopback and your local network, https anywhere else."
+            />
+            <View style={styles.row}>
+              <Button label="Test" icon="radar" variant="secondary" loading={testing} onPress={test} style={styles.flex} />
+              <Button label="Save" icon="check" onPress={saveServer} style={styles.flex} />
+            </View>
+            <Pressable onPress={() => setUrl('https://omniroute.online')} style={styles.linkRow}>
+              <MaterialCommunityIcons name="earth" size={16} color={theme.textMuted} />
+              <Text style={styles.linkLabel}>Use the public gateway</Text>
+            </Pressable>
+            {testResult ? (
+              <Text style={[styles.testResult, { color: testResult.startsWith('Online') ? theme.success : theme.danger }]}>
+                {testResult}
+              </Text>
+            ) : null}
+          </View>
+        </Card>
+
+        <SectionHeader title="SESSION" />
+        <Card>
+          <ListRow
+            icon={session.authenticated === false ? 'lock-outline' : 'shield-check-outline'}
+            iconColor={session.authenticated === false ? '#f5a524' : theme.success}
+            title={
+              session.authenticated === false
+                ? 'The gateway wants a session'
+                : session.authenticated
+                  ? 'Signed in (or not needed)'
+                  : 'Unknown'
+            }
+            subtitle="A local gateway trusts requests from this phone; a password on it changes that."
           />
-          <View style={styles.row}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.btn,
-                styles.btnSecondary,
-                pressed && styles.pressed,
-              ]}
-              onPress={test}
-              disabled={testing}
-              accessibilityRole="button"
-            >
-              {testing ? (
-                <ActivityIndicator size="small" color={theme.text} />
-              ) : (
-                <MaterialCommunityIcons name="radar" size={17} color={theme.text} />
-              )}
-              <Text style={styles.btnLabel}>Test</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [
-                styles.btn,
-                styles.btnSecondary,
-                pressed && styles.pressed,
-              ]}
-              onPress={usePublic}
-              accessibilityRole="button"
-            >
-              <MaterialCommunityIcons name="earth" size={17} color={theme.text} />
-              <Text style={styles.btnLabel}>Public</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}
-              onPress={saveServer}
-              accessibilityRole="button"
-            >
-              <MaterialCommunityIcons name="check" size={17} color="#0b0f1a" />
-              <Text style={styles.btnLabelDark}>Save</Text>
-            </Pressable>
+          <View style={styles.cardBody}>
+            <Field
+              label="API token (optional)"
+              value={token}
+              onChange={setToken}
+              secure
+              placeholder="Paste an OmniRoute API key"
+              hint="Sent as a bearer token on every request. Useful when the gateway is on a LAN or a tunnel."
+            />
+            <View style={styles.row}>
+              <Button label="Save token" icon="key-plus" variant="secondary" loading={savingToken} onPress={saveToken} style={styles.flex} />
+              <Button label="Sign in" icon="login" variant="secondary" onPress={() => router.push('/sign-in')} style={styles.flex} />
+            </View>
+            {session.cookie ? (
+              <Button
+                label="Sign out of this gateway"
+                icon="logout"
+                variant="ghost"
+                onPress={async () => {
+                  await session.signOut();
+                  showToast('Signed out', 'ok');
+                }}
+              />
+            ) : null}
           </View>
-          {testResult ? (
-            <Text
-              style={[
-                styles.testResult,
-                testResult.startsWith('Online')
-                  ? { color: theme.success }
-                  : { color: theme.danger },
-              ]}
-            >
-              {testResult}
-            </Text>
-          ) : null}
-          <Pressable
-            style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.7 }]}
+        </Card>
+
+        <SectionHeader title="DASHBOARD-FIRST SETTINGS" />
+        <Card>
+          <ListRow
+            icon="tune-variant"
+            title="Advanced configuration lives on the gateway"
+            subtitle="Compression engines, routing rules, cache, CLI tools and provider onboarding are configured in the gateway's own dashboard — the app shows the results of those settings rather than duplicating their editors."
+          />
+        </Card>
+
+        <SectionHeader title="APP" />
+        <Card>
+          <ListRow icon="information-outline" title="OmniRoute Mobile" detail={`v${appVersion}`} />
+          <ListRow
+            icon="sync"
+            title="Reset the app"
+            subtitle="Forget the saved gateway and return to the connection screen"
             onPress={changeServer}
-            accessibilityRole="button"
-          >
-            <MaterialCommunityIcons name="swap-horizontal" size={17} color={theme.textMuted} />
-            <Text style={styles.linkLabel}>Change gateway / reset app</Text>
-          </Pressable>
-        </View>
-
-        <Text style={styles.cardTitle}>DATA</Text>
-        <View style={styles.card}>
-          <Pressable
-            style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.7 }]}
-            onPress={clearData}
-            disabled={clearing}
-            accessibilityRole="button"
-          >
-            {clearing ? (
-              <ActivityIndicator size="small" color={theme.textMuted} />
-            ) : (
-              <MaterialCommunityIcons name="delete-sweep" size={17} color={theme.textMuted} />
-            )}
-            <Text style={styles.linkLabel}>Clear dashboard cookies & cache</Text>
-          </Pressable>
-          <Text style={styles.note}>
-            Your session lives in the app’s web storage — clearing it signs you out of the
-            dashboard.
-          </Text>
-        </View>
-
-        <Text style={styles.cardTitle}>ABOUT</Text>
-        <View style={styles.card}>
-          <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>OmniRoute Mobile</Text>
-            <Text style={styles.aboutValue}>v{appVersion}</Text>
-          </View>
-          <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>Source</Text>
-            <Pressable onPress={() => openURL(OMNIROUTE_REPO).catch(() => {})}>
-              <Text style={styles.aboutLink}>github.com/diegosouzapw/OmniRoute</Text>
-            </Pressable>
-          </View>
-          <View style={styles.aboutRow}>
-            <Text style={styles.aboutLabel}>Build</Text>
-            <Pressable
-              onPress={() =>
-                openURL(
-                  'https://github.com/evrahimkhan/Omniroute_mobile/actions',
-                ).catch(() => {})
-              }
-            >
-              <Text style={styles.aboutLink}>GitHub workflow → APK / Docker</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.note}>
-            This app is a native shell for the OmniRoute gateway. The gateway source is
-            compiled by the CI pipeline (Next.js build + Docker image + Android APK).
-            OmniRoute is MIT licensed.
-          </Text>
-        </View>
-      </ScrollView>
+          />
+          <ListRow
+            icon="cellphone"
+            title="Everything here is native"
+            subtitle="The app talks to the gateway's JSON API. No screen is a web view."
+          />
+        </Card>
+      </Screen>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    backgroundColor: theme.tabBarBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-  },
-  backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    flex: 1,
-    color: theme.text,
-    fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  scroll: { padding: 16, paddingBottom: 48 },
-  cardTitle: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    marginTop: 18,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  card: {
-    backgroundColor: theme.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-    padding: 14,
-    gap: 10,
-  },
-  fieldLabel: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
-  input: {
-    backgroundColor: theme.bg,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 12,
-    color: theme.text,
-    fontSize: 15,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-  },
+  cardBody: { padding: 12, gap: 12 },
   row: { flexDirection: 'row', gap: 8 },
-  btn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    borderRadius: 12,
-    paddingVertical: 11,
-    borderWidth: 1,
-    borderColor: theme.border,
-    backgroundColor: theme.bg,
-  },
-  btnPrimary: { backgroundColor: theme.accent, borderColor: theme.accent },
-  btnSecondary: { backgroundColor: theme.bg },
-  pressed: { opacity: 0.85 },
-  btnLabel: { color: theme.text, fontWeight: '700', fontSize: 13 },
-  btnLabelDark: { color: '#0b0f1a', fontWeight: '800', fontSize: 13 },
+  flex: { flex: 1 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  linkLabel: { color: theme.text, fontSize: 13, fontWeight: '600' },
   testResult: { fontSize: 13, fontWeight: '600' },
-  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
-  linkLabel: { color: theme.text, fontSize: 14, fontWeight: '500', flex: 1 },
-  note: { color: theme.textMuted, fontSize: 12, lineHeight: 17 },
-  aboutRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  aboutLabel: { color: theme.textMuted, fontSize: 13 },
-  aboutValue: { color: theme.text, fontSize: 13, fontWeight: '700' },
-  aboutLink: { color: theme.accent, fontSize: 13, fontWeight: '600' },
 });

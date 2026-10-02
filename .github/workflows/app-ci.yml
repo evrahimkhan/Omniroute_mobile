@@ -13,7 +13,10 @@
 #      and boots both payload shapes over loopback — the chain the phone runs)
 #   8. npm run runtime:contract  (the JS, Kotlin and manifest surfaces agree)
 #   9. npm run url:test      (a bare `192.168.1.10:20128` is not https)
-#  10. expo export           (Metro/Hermes bundle → proves routing + imports)
+#  10. npm run api:test      (the native client against a real fake gateway:
+#      URL rules, session cookie, error surfaces, SSE chat, and the invariant
+#      that no screen renders a WebView and every menu entry is a real screen)
+#  11. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -97,6 +100,14 @@ jobs:
       # behavioural now, and this exercises the real module.
       - name: Check the gateway URL rules
         run: npm run url:test
+
+      # The dashboard used to be a WebView, so a broken screen was the
+      # dashboard's problem. Every screen is native now, and a normalizer that
+      # reads the wrong field is a blank page on a phone with no console — so
+      # the client is exercised against a server that answers the way the
+      # gateway really does, including the shapes that have already bitten.
+      - name: Check the native gateway client
+        run: npm run api:test
 
       - name: Typecheck
         run: npx tsc --noEmit

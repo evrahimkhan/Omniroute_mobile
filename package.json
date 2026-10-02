@@ -19,6 +19,7 @@
     "gateway:embed": "node scripts/embed-gateway-bootstrap.mjs",
     "gateway:test": "node scripts/check-gateway-log.mjs",
     "url:test": "node scripts/check-server-url.mjs",
+    "api:test": "node scripts/check-api-client.mjs",
     "payload:pack": "node scripts/pack-payload.mjs",
     "payload:test": "node scripts/check-payload-pack.mjs",
     "payload:install-test": "node scripts/check-payload-install.mjs"
@@ -28,6 +29,7 @@
     "@react-native-async-storage/async-storage": "3.1.1",
     "expo": "~57.0.25",
     "expo-build-properties": "^57.0.22",
+    "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.19",
     "expo-font": "~57.0.4",
     "expo-haptics": "~57.0.3",
@@ -39,8 +41,7 @@
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-web": "0.21.3",
-    "react-native-webview": "14.0.1"
+    "react-native-web": "0.21.3"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",

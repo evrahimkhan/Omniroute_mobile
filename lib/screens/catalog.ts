@@ -43,7 +43,11 @@ export interface Surface {
 
 export interface SurfaceSection {
   id: string;
+  /** The dashboard's own section name, kept for traceability. */
   title: string;
+  /** What the phone menu shows — short, and not the internal taxonomy. */
+  label: string;
+  subtitle: string;
   icon: Surface['icon'];
   surfaces: Surface[];
 }
@@ -180,9 +184,23 @@ const SECTION_ICONS: Record<string, Surface['icon']> = {
   'Help': 'help-circle-outline',
 };
 
+const SECTION_PRESENTATION: Record<string, { label: string; subtitle: string }> = {
+  'OmniProxy': { label: 'Gateway', subtitle: 'Endpoints, API keys, providers and combos' },
+  'Analytics': { label: 'Analytics', subtitle: 'Usage, health, evaluations and search' },
+  'Costs': { label: 'Costs', subtitle: 'Spend, pricing, budgets and free tiers' },
+  'Monitoring': { label: 'Monitoring', subtitle: 'Logs, activity and runtime health' },
+  'Dev Tools': { label: 'Developer tools', subtitle: 'CLI tools, agent bridge and traffic inspection' },
+  'Agentic Features': { label: 'Agents', subtitle: 'Cloud agents, skills and memory' },
+  'Other Features': { label: 'More features', subtitle: 'Everything else the gateway offers' },
+  'Configuration': { label: 'Settings', subtitle: 'Compression, routing, cache and security' },
+  'Help': { label: 'Help & about', subtitle: 'Docs, changelog and this build' },
+};
+
 export const SECTIONS: SurfaceSection[] = SECTION_ORDER.map((title) => ({
   id: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
   title,
+  label: SECTION_PRESENTATION[title]?.label ?? title,
+  subtitle: SECTION_PRESENTATION[title]?.subtitle ?? '',
   icon: SECTION_ICONS[title] ?? 'folder-outline',
   surfaces: SURFACES.filter((surface) => surface.section === title),
 })).filter((section) => section.surfaces.length > 0);

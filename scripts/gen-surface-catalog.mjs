@@ -115,17 +115,66 @@ const ICONS = {
   'web-refresh': 'web-refresh',
 };
 
-const SECTION_ICONS = {
-  OmniProxy: 'swap-horizontal-bold',
-  Analytics: 'chart-box-outline',
-  Costs: 'cash-multiple',
-  Monitoring: 'monitor-dashboard',
-  'Dev Tools': 'toolbox-outline',
-  'Agentic Features': 'robot-outline',
-  'Other Features': 'shape-outline',
-  Configuration: 'tune-variant',
-  Help: 'help-circle-outline',
+/**
+ * How each dashboard section reads on a phone.
+ *
+ * The sidebar's own names are the product's internal taxonomy — "OmniProxy",
+ * "Other Features" — and a menu that repeats them verbatim is the web sidebar
+ * with a different scroll bar. A phone menu needs a short label, a line saying
+ * what is inside, and no more than a screenful of entries.
+ */
+const SECTION_PRESENTATION = {
+  OmniProxy: {
+    label: 'Gateway',
+    subtitle: 'Endpoints, API keys, providers and combos',
+    icon: 'swap-horizontal-bold',
+  },
+  Analytics: {
+    label: 'Analytics',
+    subtitle: 'Usage, health, evaluations and search',
+    icon: 'chart-box-outline',
+  },
+  Costs: {
+    label: 'Costs',
+    subtitle: 'Spend, pricing, budgets and free tiers',
+    icon: 'cash-multiple',
+  },
+  Monitoring: {
+    label: 'Monitoring',
+    subtitle: 'Logs, activity and runtime health',
+    icon: 'monitor-dashboard',
+  },
+  'Dev Tools': {
+    label: 'Developer tools',
+    subtitle: 'CLI tools, agent bridge and traffic inspection',
+    icon: 'toolbox-outline',
+  },
+  'Agentic Features': {
+    label: 'Agents',
+    subtitle: 'Cloud agents, skills and memory',
+    icon: 'robot-outline',
+  },
+  'Other Features': {
+    label: 'More features',
+    subtitle: 'Everything else the gateway offers',
+    icon: 'shape-outline',
+  },
+  Configuration: {
+    label: 'Settings',
+    subtitle: 'Compression, routing, cache and security',
+    icon: 'tune-variant',
+  },
+  Help: {
+    label: 'Help & about',
+    subtitle: 'Docs, changelog and this build',
+    icon: 'help-circle-outline',
+  },
 };
+
+/** Icons for sections the presentation map does not name. */
+const SECTION_ICONS = Object.fromEntries(
+  Object.entries(SECTION_PRESENTATION).map(([title, presentation]) => [title, presentation.icon])
+);
 
 const quote = (value) => `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
@@ -175,7 +224,11 @@ lines.push(`}`);
 lines.push('');
 lines.push(`export interface SurfaceSection {`);
 lines.push(`  id: string;`);
+lines.push(`  /** The dashboard's own section name, kept for traceability. */`);
 lines.push(`  title: string;`);
+lines.push(`  /** What the phone menu shows — short, and not the internal taxonomy. */`);
+lines.push(`  label: string;`);
+lines.push(`  subtitle: string;`);
 lines.push(`  icon: Surface['icon'];`);
 lines.push(`  surfaces: Surface[];`);
 lines.push(`}`);
@@ -224,9 +277,17 @@ lines.push(`const SECTION_ICONS: Record<string, Surface['icon']> = {`);
 for (const [title, icon] of Object.entries(SECTION_ICONS)) lines.push(`  ${quote(title)}: ${quote(icon)},`);
 lines.push(`};`);
 lines.push('');
+lines.push(`const SECTION_PRESENTATION: Record<string, { label: string; subtitle: string }> = {`);
+for (const [title, presentation] of Object.entries(SECTION_PRESENTATION)) {
+  lines.push(`  ${quote(title)}: { label: ${quote(presentation.label)}, subtitle: ${quote(presentation.subtitle)} },`);
+}
+lines.push(`};`);
+lines.push('');
 lines.push(`export const SECTIONS: SurfaceSection[] = SECTION_ORDER.map((title) => ({`);
 lines.push(`  id: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),`);
 lines.push(`  title,`);
+lines.push(`  label: SECTION_PRESENTATION[title]?.label ?? title,`);
+lines.push(`  subtitle: SECTION_PRESENTATION[title]?.subtitle ?? '',`);
 lines.push(`  icon: SECTION_ICONS[title] ?? 'folder-outline',`);
 lines.push(`  surfaces: SURFACES.filter((surface) => surface.section === title),`);
 lines.push(`})).filter((section) => section.surfaces.length > 0);`);

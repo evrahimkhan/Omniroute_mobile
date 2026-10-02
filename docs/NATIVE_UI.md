@@ -81,10 +81,27 @@ renderer — a wrong number is worse than no number.
 
 ## What changed in the app shell
 
-Five native tabs plus pushed routes. The catalog lives in the **More** tab: the
-same grouping the dashboard's sidebar uses, searchable across titles, subtitles
-and API routes, with a per-section count. Every entry opens `/surface/[id]`,
-which looks the surface up and renders it — one route, not ninety files.
+Five native tabs plus pushed routes. The catalog lives in the **Menu** tab, and
+its *shape* matters as much as its contents: the first version of it was native
+but web-shaped — the dashboard's whole sidebar taxonomy (OmniProxy, Analytics,
+Costs, Dev Tools, "Other Features"…) poured into one scrolling list of
+ninety-four rows, which is the web sidebar with a different scroll bar.
+
+So the screen is a phone menu, which means short and drillable:
+
+- the gateway's status, and a way into Settings or sign-in;
+- **Everyday** — the six screens used daily (Playground, Models, API keys, Logs,
+  Combos, Settings);
+- a search box that searches *every* function flat, because a phone search should
+  not make you guess which section a setting lives in;
+- **nine sections**, each with a plain-language label, a line saying what is
+  inside, and a count — one tap from its own list (`/section/[id]`).
+
+The section names the dashboard uses are kept in the catalog as
+`SurfaceSection.title` for traceability, but the menu shows `label` and
+`subtitle`: internal taxonomy ("Other Features") is not a phone menu. Individual
+surfaces still open `/surface/[id]`, which looks the surface up and renders it —
+one route, not ninety files.
 
 Screens built for this refactor: Home (health, telemetry, providers, recent
 calls), Playground (streaming chat with Stop), Models (searchable catalog),
@@ -109,7 +126,7 @@ Two behaviours worth knowing, both learned the hard way:
 
 ## Verification
 
-`npm run api:test` (95 assertions) compiles the real client and runs it against a
+`npm run api:test` (102 assertions) compiles the real client and runs it against a
 fake gateway on loopback — a real HTTP server, not a stubbed fetch. It covers URL
 building (`192.168.1.10:20128` is `http`, not `https`), the readers, the error
 surfaces, cookie capture and replay, mid-UTF-8 SSE chunk splitting, chat path
@@ -125,7 +142,10 @@ It also asserts the migration itself, so it cannot quietly regress:
 - `lib/webData.ts`, `lib/features.ts` and `app/feature/` do not exist;
 - every custom surface's route resolves to a file, every fetching surface names
   an `/api/…` route, every `local` surface explains itself, and the sections
-  partition the catalog without losing an entry.
+  partition the catalog without losing an entry;
+- the menu is a menu: it searches, it opens surfaces through the shared helper,
+  it drills into `/section/[id]` rather than listing everything, and it holds no
+  more than a screenful of entries.
 
 `npm run surfaces:test` verifies the generated catalog against its snapshot. Both
 run in App CI with the typecheck and the Metro bundle, so a surface pointing at a

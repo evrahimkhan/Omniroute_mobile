@@ -31,6 +31,8 @@ export default function RootLayout() {
           <Stack.Screen name="logs" />
           <Stack.Screen name="combos" />
           <Stack.Screen name="sign-in" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="section/[id]" />
+          <Stack.Screen name="surface/[id]" />
         </Stack>
       </ToastProvider>
     </ApiProvider>

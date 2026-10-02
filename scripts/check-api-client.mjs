@@ -569,23 +569,55 @@ try {
   // Every destination the menu offers must be a screen that exists. A dead menu
   // entry is exactly the failure a native app must not have, because it cannot
   // fall back to the browser any more.
-  const destinations = readFileSync(join(root, 'lib', 'destinations.ts'), 'utf8');
-  const routes = [...destinations.matchAll(/route:\s*'([^']+)'/g)].map((m) => m[1]);
-  const missingRoutes = routes.filter((route) => {
-    const cleaned = route.replace(/^\//, '').replace('/(tabs)', '(tabs)').replace(/^\/*/, '');
-    const candidates = [
-      join(root, 'app', `${cleaned.replace(/^\(tabs\)\//, '(tabs)/')}.tsx`),
-      join(root, 'app', cleaned.replace(/^\(tabs\)\//, '(tabs)/'), 'index.tsx'),
-      join(root, 'app', `${cleaned}.tsx`),
-    ];
-    return !candidates.some((candidate) => existsSync(candidate.replace('/(tabs)//', '/(tabs)/')));
-  });
+  /** An expo-router path → the file that serves it. */
+  const routeFile = (route) => {
+    const cleaned = route.replace(/^\//, '');
+    const base = cleaned.replace(/^\(tabs\)\/?/, '');
+    const dir = cleaned.startsWith('(tabs)') ? '(tabs)' : '';
+    if (!base) return join(root, 'app', dir, 'index.tsx');
+    return join(root, 'app', dir, `${base}.tsx`);
+  };
+
+  const customRoutes = catalog.SURFACES.filter((surface) => surface.kind === 'custom').map((surface) => surface.route);
+  const missingRoutes = customRoutes.filter((route) => !existsSync(routeFile(route)));
   check(
-    `every menu destination (${routes.length}) is a real screen`,
+    `every bespoke screen behind a menu entry (${customRoutes.length}) exists`,
     missingRoutes.length === 0,
     missingRoutes.join(', ')
   );
-  check('the menu is searchable and declared once', /NATIVE_DESTINATIONS/.test(destinations) && /DestinationSection/.test(destinations));
+  check(
+    'the routes a surface can open exist',
+    existsSync(join(root, 'app', 'surface', '[id].tsx')) && existsSync(join(root, 'app', 'section', '[id].tsx'))
+  );
+
+  // The menu has to behave like a phone menu: a short list that drills down,
+  // not the dashboard's own sidebar poured into one scroll.
+  const menu = readFileSync(join(root, 'app', '(tabs)', 'more.tsx'), 'utf8');
+  check('the menu is a searchable index', /SearchField/.test(menu) && /searchSurfaces/.test(menu));
+  check('the menu drills into sections instead of listing every surface', /\/section\/\$\{/.test(menu));
+  check('the menu opens surfaces through the shared helper', /openSurface/.test(menu));
+  check(
+    `the menu is a screenful, not the web sidebar (${catalog.SECTIONS.length} sections, largest ${Math.max(
+      ...catalog.SECTIONS.map((section) => section.surfaces.length)
+    )})`,
+    catalog.SECTIONS.length <= 12
+  );
+  check(
+    'sections carry a phone-facing label, not the dashboard taxonomy',
+    catalog.SECTIONS.every(
+      (section) =>
+        typeof section.label === 'string' &&
+        section.label.length > 0 &&
+        typeof section.subtitle === 'string' &&
+        section.subtitle.length > 0
+    ),
+    catalog.SECTIONS.filter((section) => !section.subtitle).map((section) => section.title).join(', ')
+  );
+  check(
+    'a section keeps the dashboard name it came from',
+    catalog.SECTIONS.every((section) => typeof section.title === 'string' && section.title.length > 0)
+  );
+  check('the old hand-written menu is gone', !existsSync(join(root, 'lib', 'features.ts')));
 } finally {
   server.close();
   rmSync(out, { recursive: true, force: true });

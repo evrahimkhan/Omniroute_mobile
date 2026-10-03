@@ -354,13 +354,16 @@ jobs:
               lists, analytics as figures rather than charts.
             - Host the gateway on the phone itself: install the payload from inside the app, start
               it, and keep it running in the background.
+            - A gateway that dies inside a native library says which one and moves it aside on the
+              next start, so the crash loop ends by itself instead of needing a rebuild.
             - Works with a remote gateway too — point it at any reachable address.
 
             ### Install
             1. Download `OmnirouteMobile-v*.apk` below.
             2. Copy it to your phone and open it (allow “install unknown apps”).
-            3. Enter your gateway URL (default: `https://omniroute.online`, or your own gateway
-               built by the **Build OmniRoute source** workflow), or host one on this phone.
+            3. Leave the address alone to use a gateway on this phone (`http://127.0.0.1:20128`),
+               or enter the address of one you run elsewhere. `omniroute.online` is the project's
+               website — it is not a gateway and never will be.
             4. If the gateway asks for a password, sign in once from Settings — the session is
                kept by the app.
 

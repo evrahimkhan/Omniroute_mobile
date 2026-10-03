@@ -512,12 +512,13 @@ function nativeProbeState(gatewayDir, installedAt) {
         installedAt: parsed.installedAt ?? null,
         ok: Array.isArray(parsed.ok) ? parsed.ok : [],
         disabled: Array.isArray(parsed.disabled) ? parsed.disabled : [],
+      strikes: Number.isFinite(parsed.strikes) ? parsed.strikes : 0,
       };
     }
   } catch {
     // No record yet, or an unreadable one: a fresh start is the safe reading.
   }
-  return { installedAt: installedAt ?? null, ok: [], disabled: [] };
+  return { installedAt: installedAt ?? null, ok: [], disabled: [], strikes: 0 };
 }
 
 function saveNativeProbeState(gatewayDir, state) {
@@ -575,14 +576,16 @@ function findNativeAddons(appDir, limit = 150) {
 async function probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt }) {
   const state = nativeProbeState(gatewayDir, installedAt);
   const addons = findNativeAddons(appDir);
-  if (!addons.length) return;
 
   // 1. Did the previous boot die while loading one of them?
-  const lastProbe = [...previousBoot].reverse().find((line) => line.includes(' probing '));
-  const diedIn =
-    lastProbe && lastProbe.includes(' probing ')
-      ? lastProbe.slice(lastProbe.indexOf(' probing ') + ' probing '.length).trim()
-      : '';
+  // Only the record's LAST line means a death. A probe line with anything after
+  // it — `loading …`, `the server is answering` — is a module that loaded fine,
+  // and disabling on that would strip the last module probed by every successful
+  // boot. The test suite caught this; it had already shipped once.
+  const lastLine = previousBoot.length ? previousBoot[previousBoot.length - 1] : '';
+  const diedIn = lastLine.includes(' probing ')
+    ? lastLine.slice(lastLine.indexOf(' probing ') + ' probing '.length).trim()
+    : '';
 
   if (diedIn && addons.includes(diedIn)) {
     // Moved aside whatever it is, and that is the point. Keeping a file that a
@@ -611,10 +614,58 @@ async function probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt
     log(`native addon probe: disabled for this install: ${state.disabled.join(', ')}`);
   }
 
+  // 2. A boot that was killed *after* it started serving.
+  //
+  // This is the failure the pre-boot probe above cannot see: every library loads
+  // fine on its own, the server comes up and answers, and the process dies
+  // minutes or seconds later inside something the payload does while running. The
+  // record cannot tell that death from a normal one — both leave it ending at
+  // `the server is answering`, because a killed process gets no chance to write a
+  // farewell — so the app supplies the one fact only Android has: the last process
+  // ended on a fatal signal (GATEWAY_PREV_DEATH, see lib/gatewayInstaller.ts).
+  //
+  // Two of them, and every optional native module is set aside at once. One death
+  // could be a fluke, a low-memory kill that looked like a crash, a payload being
+  // poked by hand; two in a row is a loop, and a loop has to end. Which libraries
+  // go is a guess the second strike makes on purpose: the alternative is a gateway
+  // the user cannot start at all, and every file renamed here comes back with a
+  // reinstall.
+  const diedServing =
+    process.env.GATEWAY_PREV_DEATH === 'fatal-signal' &&
+    previousBoot.length > 0 &&
+    /the server is answering$/.test(previousBoot[previousBoot.length - 1]);
+  if (diedServing) {
+    state.strikes = (state.strikes ?? 0) + 1;
+    saveNativeProbeState(gatewayDir, state);
+    if (state.strikes < 2) {
+      log(
+        'native addon probe: the previous boot was killed by a fatal signal after it started serving (strike 1) — one more and every optional native module is set aside'
+      );
+    } else {
+      const victims = addons.filter((rel) => OPTIONAL_ADDONS.test(rel) && !state.disabled.includes(rel));
+      for (const rel of victims) {
+        const file = path.join(appDir, rel);
+        try {
+          await fs.rename(file, `${file}.disabled`);
+          if (!state.disabled.includes(rel)) state.disabled.push(rel);
+        } catch (err) {
+          log(`warning: could not set aside ${rel}: ${err.message}`);
+        }
+      }
+      state.strikes = 0;
+      saveNativeProbeState(gatewayDir, state);
+      log(
+        victims.length
+          ? `native addon probe: the gateway kept dying after it started serving, and no single load explains it — set aside ${victims.length} optional native module(s): ${victims.join(', ')}`
+          : 'native addon probe: the gateway keeps dying after it starts serving and there is no optional native module left to set aside — the fault is inside the payload or the runtime, not in a library this app can move'
+      );
+    }
+  }
+
   const remaining = addons.filter((rel) => !state.ok.includes(rel) && !state.disabled.includes(rel));
   if (!remaining.length) return;
 
-  // 2. A boot that came up needs no probe: this runs only while something is
+  // 3. A boot that came up needs no probe: this runs only while something is
   //    wrong, which is also what keeps it off the happy path.
   if (previousBoot.some((line) => line.includes('the server is answering'))) return;
 

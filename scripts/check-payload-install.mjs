@@ -110,9 +110,37 @@ process.abort();
 `;
 }
 
-/**
- * A free loopback port, released immediately for the child to claim.
- */
+  /**
+   * A payload that boots, serves, and stays up.
+   *
+   * It never crashes on its own: the death is supplied by the test, through the
+   * same marker the app sets when Android reports a fatal signal
+   * (`GATEWAY_PREV_DEATH`). That is the honest way to test this policy — what the
+   * bootstrap reacts to is the app's statement about the last process, not a crash
+   * it can observe itself.
+   */
+function fixtureServingServer(marker) {
+    return `const http = require('node:http');
+  console.log(${JSON.stringify(marker + ' started')});
+  http
+    .createServer((req, res) => {
+      if (req.url === '/healthz') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    })
+    .listen(Number(process.env.PORT), '127.0.0.1', () => console.log('${marker} listening'));
+  // Outlive the test's health check, then hang around: the app stops it.
+  setInterval(() => {}, 1000);
+  `;
+  }
+
+  /**
+   * A free loopback port, released immediately for the child to claim.
+   */
 async function freePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -251,6 +279,30 @@ __attribute__((constructor)) static void crash_on_load(void) {
     process.stdout.write(`  · no C compiler available: the native-crash case will fail\n`);
   }
 
+  // A payload that does the thing the pre-boot probe cannot see: every library
+  // loads cleanly, the server comes up and answers, and the process is killed by a
+  // fatal signal *after* that. `sharp` is here as a real, harmless addon because
+  // the second strike is defined by what it is allowed to remove — the test has to
+  // be able to see it happen.
+  const striking = join(work, 'striking');
+  const strikeSharp = join(striking, 'node_modules', 'sharp', 'build', 'Release');
+  mkdirSync(strikeSharp, { recursive: true });
+  writeFileSync(join(striking, 'server.js'), fixtureServingServer('STRIKE'));
+  writeFileSync(join(striking, 'node_modules', 'sharp', 'package.json'), JSON.stringify({ name: 'sharp', version: '0.0.0' }));
+  let sharpBuilt = false;
+  if (crashyBuilt) {
+    try {
+      const sharpSource = join(work, 'harmless.c');
+      writeFileSync(sharpSource, '/* An addon that loads and does nothing at all. */\n');
+      execFileSync('cc', ['-shared', '-fPIC', '-nostdlib', '-fno-stack-protector', '-o', join(strikeSharp, 'sharp.node'), sharpSource], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      sharpBuilt = true;
+    } catch {
+      process.stdout.write(`  · could not build the harmless addon: the strike case will fail\n`);
+    }
+  }
+
   const standaloneTar = join(work, 'standalone.tar.gz');
   const npmTar = join(work, 'npm.tar.gz');
   const abortTar = join(work, 'aborting.tar.gz');
@@ -259,6 +311,8 @@ __attribute__((constructor)) static void crash_on_load(void) {
   const npmManifest = packFixture(npmShaped, npmTar, 'dist/server.js');
   const abortManifest = packFixture(aborting, abortTar, 'server.js');
   const crashManifest = packFixture(crashing, crashTar, 'server.js');
+  const strikeTar = join(work, 'striking.tar.gz');
+  const strikeManifest = packFixture(striking, strikeTar, 'server.js');
 
   // --- serve the archives, manifest included -------------------------------
   const served = new Map([
@@ -268,6 +322,8 @@ __attribute__((constructor)) static void crash_on_load(void) {
     ['/npm.tar.gz.json', readFileSync(npmManifest)],
     ['/aborting.tar.gz', readFileSync(abortTar)],
     ['/aborting.tar.gz.json', readFileSync(abortManifest)],
+    ['/striking.tar.gz', readFileSync(strikeTar)],
+    ['/striking.tar.gz.json', readFileSync(strikeManifest)],
     ['/crashing.tar.gz', readFileSync(crashTar)],
     ['/crashing.tar.gz.json', readFileSync(crashManifest)],
   ]);
@@ -697,6 +753,52 @@ __attribute__((constructor)) static void crash_on_load(void) {
       ) === true
   );
 
+  // --- case 13: killed *after* it started serving ---------------------------
+  //
+  // The b66 device failure, which the probe above cannot see: nothing is wrong at
+  // load time, the gateway comes up, and the process is killed later. One such
+  // death is a fluke; two in a row is a loop, and the loop ends by setting aside
+  // every optional native module at once.
+  const strikeDir = join(work, 'install-striking');
+  const strikeSharpFile = join(strikeDir, 'app', 'node_modules', 'sharp', 'build', 'Release', 'sharp.node');
+  const readyOnAnswer = (text) => text.includes('the server is answering') || text.includes('[gateway] FAILED');
+
+  await run('serving', strikeDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}/striking.tar.gz`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/striking.tar.gz.json`,
+  }, { ready: readyOnAnswer });
+  const firstAnswered = existsSync(join(strikeDir, 'boot.log')) &&
+    readFileSync(join(strikeDir, 'boot.log'), 'utf8').trim().split('\n').some((l) => l.includes('the server is answering'));
+  check('a payload that serves fine leaves the record ending at the health answer', firstAnswered);
+
+  // Strike 1: said, not acted on.
+  await run('strike one', strikeDir, { GATEWAY_PREV_DEATH: 'fatal-signal' }, { ready: readyOnAnswer });
+  const afterStrike1 = readFileSync(join(strikeDir, GATEWAY_LOG_NAME), 'utf8');
+  check('one fatal death after serving is reported as a strike, not acted on', afterStrike1.includes('strike 1'));
+  check('and nothing is set aside yet', existsSync(strikeSharpFile));
+
+  // Strike 2: the bulk disable.
+  const thirdBoot = await run('strike two', strikeDir, { GATEWAY_PREV_DEATH: 'fatal-signal' }, { ready: readyOnAnswer });
+  const afterStrike2 = readFileSync(join(strikeDir, GATEWAY_LOG_NAME), 'utf8');
+  check(
+    'the second one sets aside every optional native module',
+    sharpBuilt && /set aside 1 optional native module\(s\)/.test(afterStrike2)
+  );
+  check('the payload still serves afterwards', sharpBuilt && thirdBoot.servedOk === 'ok');
+  check('and the file is renamed, not deleted', existsSync(`${strikeSharpFile}.disabled`) && !existsSync(strikeSharpFile));
+  const strikeState = JSON.parse(readFileSync(join(strikeDir, 'native-probe.json'), 'utf8'));
+  check(
+    'the strike count resets, so a healthy run is not punished again',
+    strikeState.strikes === 0 && strikeState.disabled.includes('node_modules/sharp/build/Release/sharp.node')
+  );
+
+  // And the marker is what drives all of this: no fatal death reported, no strike.
+  await run('strike none', strikeDir, {}, { ready: readyOnAnswer });
+  check(
+    'a restart with no fatal signal in the app\'s report adds no strike',
+    !readFileSync(join(strikeDir, GATEWAY_LOG_NAME), 'utf8').includes('strike 1')
+  );
+
   // The third boot is the one that has to be boring: the crashing addon is out
   // of the way, remembered as disabled, and nothing probes anything again. A
   // restart loop that converges after one crash is the difference between a
@@ -729,7 +831,7 @@ __attribute__((constructor)) static void crash_on_load(void) {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 61;
+  const total = 69;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

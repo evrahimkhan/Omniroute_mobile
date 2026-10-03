@@ -457,6 +457,15 @@ export async function startLocalGateway(options: StartGatewayOptions = {}): Prom
   if (sha) env.GATEWAY_PAYLOAD_SHA256 = sha;
   else if (shaUrl) env.GATEWAY_PAYLOAD_SHA256_URL = shaUrl;
   if (options.force) env.GATEWAY_FORCE_INSTALL = '1';
+  // How the *last* process ended, when Android will say. A fatal signal is the
+  // one piece of the previous death the bootstrap cannot know on its own: a
+  // process that segfaults writes nothing about its own death, and its boot record
+  // ends at the same line whether the kernel killed it or a swipe did, because
+  // neither path gets to log. Telling them apart is what makes "it died while
+  // serving" countable — see the strike policy in gateway/bootstrap.mjs.
+  if (status.previousExit && /SIGSEGV|SIGILL|SIGBUS|SIGABRT/.test(status.previousExit)) {
+    env.GATEWAY_PREV_DEATH = 'fatal-signal';
+  }
 
   // Empty both logs before starting, so the card can never show a previous
   // attempt's failure as this one's — including when the runtime starts and

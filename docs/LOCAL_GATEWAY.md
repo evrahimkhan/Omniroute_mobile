@@ -1188,6 +1188,26 @@ mystery from the app's side: the card said the payload was installed, the log sa
 dependencies, one of them fatal to load, and no way from the outside to tell which.
 That is the whole gap the probe closes — it is a way to ask each of the six.
 
+**The death the probe cannot see, and the strikes that cover it.** A payload can
+load every library cleanly, come up, answer on its port, and die *afterwards* — and
+the boot record is silent about the difference, because a killed process writes no
+farewell: its last line is `the server is answering` whether the kernel took it or a
+swipe did. So the app supplies the one fact only Android holds. `lib/gatewayInstaller.ts`
+reads `ApplicationExitInfo` and, when the last process ended on a fatal signal, starts
+the next one with `GATEWAY_PREV_DEATH=fatal-signal`. Two such deaths in a row — one is
+a strike, not an action, because a single crash can be a fluke — and the second sets
+aside *every* optional native module at once, since nothing more specific is known.
+That converges instead of looping, and the log says which files went.
+
+**The false positive this policy replaced.** b67 read the boot record as "the
+previous boot died probing X" whenever a `probing` line appeared *anywhere* in it. A
+successful boot leaves one behind too — followed by `loading …` and `the server is
+answering` — so a healthy install had its last probed module disabled on its second
+start. The record is now read as a death only when the probe line is its final line,
+and `payload:install-test` holds the whole sequence: a payload that serves fine, a
+second boot that disables nothing, and a fatal-signal report that takes one strike,
+then two.
+
 **Why the probe is not run in a child process.** Isolation would be nicer: a crash
 in a subprocess would cost the user nothing. It is not available here, because the
 runtime is a library inside the app's own process — there is no `node` executable on

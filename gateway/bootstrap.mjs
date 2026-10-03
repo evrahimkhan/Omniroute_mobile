@@ -204,6 +204,25 @@ function bootTrace(step) {
 }
 
 /** Start a fresh record in `dir`, and record the ways this process can end. */
+/**
+ * The steps of the previous run, read before this one overwrites the record.
+ *
+ * `boot.log` is written ahead of each step and fsynced, so after a crash its
+ * last line is the step the process was taking when it died. Reading it back
+ * is what lets a boot act on its own crash instead of repeating it.
+ */
+function readPreviousBoot(dir) {
+  try {
+    return readFileSync(path.join(dir, BOOT_LOG_NAME), 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-40);
+  } catch {
+    return [];
+  }
+}
+
 function openBootLog(dir) {
   bootLogPath = path.join(dir, BOOT_LOG_NAME);
   bootSeq = 0;
@@ -462,6 +481,164 @@ function probeNativeModules(appDir) {
       (missing.length ? `; not found: ${missing.join(', ')}` : '') +
       (esmOnly.length ? `; import-only: ${esmOnly.join(', ')}` : '')
   );
+}
+
+/**
+ * The addons whose absence the gateway is known to survive: accelerators and
+ * integrations, none of them the database.
+ *
+ * This list does NOT decide what gets disabled — a file a fatal signal has been
+ * traced to is moved aside whether or not it appears here, because a boot that
+ * starts beats a boot that loops. It decides only how the log line reads, so a
+ * reader can tell "an optional accelerator came out" from "something required had
+ * to come out, and the payload may now complain about it".
+ */
+const OPTIONAL_ADDONS = /(sharp|onnxruntime|@ngrok|keytar|wreq|reqwest|tls-client|requestws)/i;
+
+const NATIVE_PROBE_FILE = 'native-probe.json';
+
+/**
+ * What is already known about this install's addons.
+ *
+ * `ok` is the load-once list: a module proven to load is never loaded again, so
+ * the probe's cost is paid once per payload rather than once per boot.
+ * `installedAt` ties the record to a payload: a new install invalidates it.
+ */
+function nativeProbeState(gatewayDir, installedAt) {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(gatewayDir, NATIVE_PROBE_FILE), 'utf8'));
+    if (parsed && (parsed.installedAt ?? null) === (installedAt ?? null)) {
+      return {
+        installedAt: parsed.installedAt ?? null,
+        ok: Array.isArray(parsed.ok) ? parsed.ok : [],
+        disabled: Array.isArray(parsed.disabled) ? parsed.disabled : [],
+      };
+    }
+  } catch {
+    // No record yet, or an unreadable one: a fresh start is the safe reading.
+  }
+  return { installedAt: installedAt ?? null, ok: [], disabled: [] };
+}
+
+function saveNativeProbeState(gatewayDir, state) {
+  try {
+    writeFileSync(path.join(gatewayDir, NATIVE_PROBE_FILE), JSON.stringify(state, null, 2));
+  } catch {
+    // Bookkeeping must never be the reason a boot fails.
+  }
+}
+
+/** Every native addon in the payload, as a path relative to it. */
+function findNativeAddons(appDir, limit = 150) {
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > 8 || found.length >= limit) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= limit) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // `.bin` holds CLI shims, `.cache` holds build scratch; neither is loaded.
+        // Nested `node_modules` are walked like any other directory.
+        if (entry.name === '.bin' || entry.name === '.cache') continue;
+        walk(full, depth + 1);
+      } else if (entry.name.endsWith('.node') && !entry.name.endsWith('.disabled')) {
+        found.push(path.relative(appDir, full));
+      }
+    }
+  };
+  walk(path.join(appDir, 'node_modules'), 0);
+  return found.sort();
+}
+
+/**
+ * Load the payload's native addons one at a time, and name the one that dies.
+ *
+ * This is the answer to a failure that has no other evidence. A SIGSEGV inside
+ * a native library kills the process between two instructions: no stack, no
+ * exit line, nothing — on the device the gateway simply vanished just after
+ * `loading server.js`. The Kotlin side can ask Android for the crash dump, but
+ * that dump is not always there (a fatal signal that the crash handler did not
+ * claim arrives as REASON_SIGNALED with no trace), so the app needs a signal
+ * that cannot be missing.
+ *
+ * Writing the name *before* each load is that signal: `bootTrace` fsyncs, so the
+ * last line of `boot.log` names the addon that was being loaded when the process
+ * died. On the next boot the same line is read back, the addon is disabled if it
+ * is optional, and the boot continues past it.
+ */
+async function probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt }) {
+  const state = nativeProbeState(gatewayDir, installedAt);
+  const addons = findNativeAddons(appDir);
+  if (!addons.length) return;
+
+  // 1. Did the previous boot die while loading one of them?
+  const lastProbe = [...previousBoot].reverse().find((line) => line.includes(' probing '));
+  const diedIn =
+    lastProbe && lastProbe.includes(' probing ')
+      ? lastProbe.slice(lastProbe.indexOf(' probing ') + ' probing '.length).trim()
+      : '';
+
+  if (diedIn && addons.includes(diedIn)) {
+    // Moved aside whatever it is, and that is the point. Keeping a file that a
+    // fatal signal has already been traced to means restarting into the same
+    // crash for ever, which is precisely the state this exists to end — the
+    // device restarted into it a dozen times with nothing to read afterwards.
+    // Which addon it is decides only how the line reads: an accelerator the
+    // gateway has a slower path without, or something unrecognised that had to
+    // go anyway. Either way the gateway starting beats the gateway looping, and
+    // the log says exactly what was removed so it can be put back by hand.
+    const optional = OPTIONAL_ADDONS.test(diedIn);
+    const file = path.join(appDir, diedIn);
+    try {
+      await fs.rename(file, `${file}.disabled`);
+      if (!state.disabled.includes(diedIn)) state.disabled.push(diedIn);
+      saveNativeProbeState(gatewayDir, state);
+      log(
+        `native addon probe: ${diedIn} killed the previous boot (${optional ? 'a known-optional accelerator' : 'not one of the known-optional addons'}) — renamed to .disabled so the gateway can start`
+      );
+    } catch (err) {
+      log(`warning: could not disable ${diedIn}, so it may kill the next boot too: ${err.message}`);
+    }
+  }
+
+  if (state.disabled.length) {
+    log(`native addon probe: disabled for this install: ${state.disabled.join(', ')}`);
+  }
+
+  const remaining = addons.filter((rel) => !state.ok.includes(rel) && !state.disabled.includes(rel));
+  if (!remaining.length) return;
+
+  // 2. A boot that came up needs no probe: this runs only while something is
+  //    wrong, which is also what keeps it off the happy path.
+  if (previousBoot.some((line) => line.includes('the server is answering'))) return;
+
+  const from = createRequire(path.join(appDir, 'server.js'));
+  let loaded = 0;
+  let refused = 0;
+  for (const rel of remaining) {
+    // Before the load, fsynced: if this is the one that kills the process, this
+    // line is what survives, and the next boot reads it.
+    bootTrace(`probing ${rel}`);
+    try {
+      from(path.join(appDir, rel));
+      loaded += 1;
+      state.ok.push(rel);
+      saveNativeProbeState(gatewayDir, state);
+    } catch (err) {
+      // A refused load is information, not a failure to recover from: the addon
+      // is missing a dependency or was built for another libc, and the payload's
+      // JS wrapper is what normally reports that. Only a *crash* disables one.
+      refused += 1;
+      log(`native addon probe: ${rel} would not load (${err?.code || err?.message || 'unknown'})`);
+    }
+  }
+  log(`native addon probe: ${loaded} loaded, ${refused} refused, ${state.disabled.length} disabled`);
 }
 
 function machineName(code) {
@@ -1056,6 +1233,10 @@ async function main() {
 
   // Before the install, not just before the boot: a payload that dies while
   // unpacking (a full disk, a killed process) leaves the same silence.
+  // Read *before* openBootLog truncates it: the previous run's record is how a
+  // boot knows what killed it, and it is the only channel that survives a native
+  // crash — nothing is flushed on the way out.
+  const previousBoot = readPreviousBoot(gatewayDir);
   openBootLog(gatewayDir);
   bootTrace(`runtime ready on node ${process.version} (pid ${process.pid})`);
 
@@ -1237,6 +1418,15 @@ async function main() {
     probeNativeModules(appDir);
   } catch (err) {
     log(`warning: could not check the payload's native modules: ${err.message}`);
+  }
+
+  // Then the addons themselves, by name, when the last boot did not come up: a
+  // crash here has no stack, so the line written before each load is the
+  // evidence — and an optional addon that died is disabled rather than kept.
+  try {
+    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: marker?.installedAt ?? null });
+  } catch (err) {
+    log(`warning: the native addon probe could not run: ${err.message}`);
   }
 
   bootTrace(`loading ${entry}`);

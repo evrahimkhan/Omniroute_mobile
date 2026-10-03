@@ -212,12 +212,53 @@ async function main() {
   mkdirSync(aborting, { recursive: true });
   writeFileSync(join(aborting, 'server.js'), fixtureAbortServer('ABORT'));
 
+  // A payload whose *native* code kills the process while the entry is being
+  // loaded: this is the on-device failure, and the only reproduction that has
+  // the same signature as the phone (a fatal signal inside a shared library,
+  // with no exception and nothing printed).
+  const crashing = join(work, 'crashing');
+  const crashyDir = join(crashing, 'node_modules', 'crashy');
+  mkdirSync(crashyDir, { recursive: true });
+  writeFileSync(join(crashing, 'server.js'), fixtureServer('NATIVE'));
+  const crashySource = join(work, 'crashy.c');
+  writeFileSync(
+    crashySource,
+    `/* An addon that dies while its constructor runs, the way a mis-built
+   native dependency does: a fatal signal inside the loader, no exception
+   and nothing printed. */
+__attribute__((constructor)) static void crash_on_load(void) {
+  *(volatile int *)0 = 1;
+}
+`
+  );
+  // Built with the runner's own compiler because there is no other way to make a
+  // real segfault inside a real shared library, and a fake would test nothing.
+  //
+  // Linked without a libc on purpose: a library carrying GLIBC_ symbols is
+  // quarantined by the payload's own native check (right CPU, wrong libc), so
+  // the crash would never get a chance to happen, and this case would silently
+  // test nothing at all. A phone's payload libraries are linked against bionic
+  // and pass that check; this stands in for one of them.
+  let crashyBuilt = false;
+  try {
+    execFileSync(
+      'cc',
+      ['-shared', '-fPIC', '-nostdlib', '-fno-stack-protector', '-o', join(crashyDir, 'crashy.node'), crashySource],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    crashyBuilt = true;
+  } catch (err) {
+    process.stdout.write(`  · no C compiler available: the native-crash case will fail\n`);
+  }
+
   const standaloneTar = join(work, 'standalone.tar.gz');
   const npmTar = join(work, 'npm.tar.gz');
   const abortTar = join(work, 'aborting.tar.gz');
+  const crashTar = join(work, 'crashing.tar.gz');
   const standaloneManifest = packFixture(standalone, standaloneTar, 'server.js');
   const npmManifest = packFixture(npmShaped, npmTar, 'dist/server.js');
   const abortManifest = packFixture(aborting, abortTar, 'server.js');
+  const crashManifest = packFixture(crashing, crashTar, 'server.js');
 
   // --- serve the archives, manifest included -------------------------------
   const served = new Map([
@@ -227,6 +268,8 @@ async function main() {
     ['/npm.tar.gz.json', readFileSync(npmManifest)],
     ['/aborting.tar.gz', readFileSync(abortTar)],
     ['/aborting.tar.gz.json', readFileSync(abortManifest)],
+    ['/crashing.tar.gz', readFileSync(crashTar)],
+    ['/crashing.tar.gz.json', readFileSync(crashManifest)],
   ]);
   // Two payloads served badly on purpose, to exercise the resume path. A phone
   // that leaves Wi-Fi range does not get a clean error: the connection either
@@ -588,6 +631,82 @@ async function main() {
     aborted.output.includes('ABORT starting') && !aborted.output.includes('[gateway] FAILED:')
   );
 
+  // --- case 12: a payload whose native addon kills the boot ----------------
+  //
+  // The device failure, in the shape the phone produced it: the install succeeds,
+  // the runtime starts, the boot record reaches `loading server.js`, and the
+  // process dies inside a native library. Nothing is printed, because a fatal
+  // signal gives no chance to print — which is why the record has to name the
+  // addon *before* it is loaded.
+  //
+  // Two boots are run: the first is the crash, the second is the recovery. The
+  // recovery is the whole point — a phone in this state must not be stuck
+  // restarting into the same segfault.
+  const nativeCrashDir = join(work, 'install-crashing-addon');
+  // The *installed* copy, not the fixture: the gateway repairs what it extracted.
+  const installedCrashy = join(nativeCrashDir, 'app', 'node_modules', 'crashy');
+  const crashyPaths = [join(installedCrashy, 'crashy.node.disabled'), join(installedCrashy, 'crashy.node')];
+  const crashBoot = await run('native crash', nativeCrashDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}/crashing.tar.gz`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/crashing.tar.gz.json`,
+  });
+  const crashRecord = existsSync(join(nativeCrashDir, 'boot.log'))
+    ? readFileSync(join(nativeCrashDir, 'boot.log'), 'utf8')
+    : '';
+  const crashRecordLines = crashRecord.split('\n').map((line) => line.trim()).filter(Boolean);
+  check(
+    'a native addon that segfaults on load: the boot record names it, written before the load',
+    crashyBuilt && crashRecordLines[crashRecordLines.length - 1].endsWith('probing node_modules/crashy/crashy.node')
+  );
+  check(
+    'the payload never reached its own code, so the record is the only evidence',
+    crashyBuilt && !crashBoot.output.includes('NATIVE started')
+  );
+  check(
+    'the gateway log claims nothing, exactly as on the device — a fatal signal cannot write',
+    !readFileSync(join(nativeCrashDir, GATEWAY_LOG_NAME), 'utf8').includes('[gateway] FAILED:')
+  );
+
+  // The second boot: the same install, the same payload, no reinstall.
+  const recovered = await run('native recovery', nativeCrashDir, {});
+  const disabledIndex = crashyPaths.findIndex((p) => existsSync(p));
+  check(
+    'the next boot disables the addon that killed the last one and serves anyway',
+    crashyBuilt && recovered.servedOk === 'ok'
+  );
+  check(
+    'and says which addon it disabled, in the log the app shows',
+    readFileSync(join(nativeCrashDir, GATEWAY_LOG_NAME), 'utf8').includes(
+      'native addon probe: node_modules/crashy/crashy.node killed the previous boot'
+    )
+  );
+  check(
+    'the addon is moved aside rather than deleted, so the install is still repairable',
+    crashyBuilt && disabledIndex !== -1 && crashyPaths[disabledIndex].endsWith('crashy.node.disabled')
+  );
+  check(
+    'the boot that died at `loading server.js` gets past it',
+    existsSync(join(nativeCrashDir, 'boot.log')) &&
+      readFileSync(join(nativeCrashDir, 'boot.log'), 'utf8').includes('loaded; waiting for the server to answer')
+  );
+  check(
+    'the install remembers what it disabled, so a restart does not repeat the crash',
+    existsSync(join(nativeCrashDir, 'native-probe.json')) &&
+      JSON.parse(readFileSync(join(nativeCrashDir, 'native-probe.json'), 'utf8')).disabled?.includes(
+        'node_modules/crashy/crashy.node'
+      ) === true
+  );
+
+  // The third boot is the one that has to be boring: the crashing addon is out
+  // of the way, remembered as disabled, and nothing probes anything again. A
+  // restart loop that converges after one crash is the difference between a
+  // gateway the user can use and one that never starts at all.
+  const settled = await run('native settled', nativeCrashDir, {});
+  check(
+    'a third boot serves without probing anything again',
+    crashyBuilt && settled.servedOk === 'ok' && !readFileSync(join(nativeCrashDir, 'boot.log'), 'utf8').includes('probing ')
+  );
+
   const logText = existsSync(join(install1, GATEWAY_LOG_NAME))
     ? readFileSync(join(install1, GATEWAY_LOG_NAME), 'utf8')
     : '';
@@ -610,7 +729,7 @@ async function main() {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 52;
+  const total = 61;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

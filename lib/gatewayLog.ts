@@ -233,6 +233,20 @@ export function describeBootTrace(text: string): string | null {
     return `The gateway process crashed on its own: ${first}`;
   }
 
+  // The addon probe's step, written immediately before each native module is
+  // loaded — so when the record stops here, that module is the one that killed
+  // the process. A different failure from a bad entry file: the payload was
+  // fine, and one of its libraries was not.
+  found = match(/^probing ([\s\S]+)$/);
+  if (found) {
+    return (
+      `The process died while loading the payload's native module ${found[1]} — a fatal signal inside ` +
+      `that library, which no handler can catch and nothing can log. The gateway moves it aside on the ` +
+      `next start and carries on without it, so a second start should come up.`
+    );
+  }
+
+
   found = match(/^loading ([\s\S]+)$/);
   if (found) {
     return (

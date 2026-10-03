@@ -215,6 +215,7 @@ async function main() {
       ],
       ['02 installing the payload', 'during the install', 'installing the payload'],
       ['03 the payload is installed', 'after installing the payload', 'the payload is installed'],
+        ['04 probing node_modules/sharp/build/Release/sharp.node', "died while loading the payload's native module node_modules/sharp/build/Release/sharp.node", 'probing ${rel}'],
       ['04 loading dist/server.js', 'died while loading dist/server.js', 'loading ${entry}'],
       [
         '05 dist/server.js loaded; waiting for the server to answer',

@@ -479,8 +479,8 @@ The fix is in three parts, and only the first is about this bug:
    exit with no `[gateway]` line as *"never ran"* rather than as a crash.
 
 Guards: `npm run payload:install-test` boots the real bootstrap **through a
-symlinked directory**, with the app's flag and without it (4 assertions; all 4
-fail against the previous two-line check). `npm run runtime:contract` asserts
+symlinked directory**, with the app's flag and without it — the layout cases, each of
+which fails against the previous two-line check.
 both halves of the flag handshake — the literal in the installer, the one the
 bootstrap reads — plus the `realpath` comparison and the startup banner. Layout
 of the same lesson as §5d: *if two files must agree at runtime, a checker has to
@@ -530,7 +530,7 @@ this still read the firehose — neither of them is `node.log`:
     "the install failed" from "nothing ran".
 
 `node.log` is still written, and is the right thing to read for a crash report. Guards: `payload:install-test` asserts the file exists, names
-the run, and receives failures too (19 assertions); `runtime:contract` asserts
+the run, and receives failures too;
 that both languages name the same file, that the bootstrap writes it and that the
 app reads it — the same handshake class as the run flag in §5f.
 
@@ -591,8 +591,8 @@ Three things had to be true before "just try again" was reasonable advice.
 Guards: `payload:install-test` serves the payload badly on purpose — one URL
 drops the socket halfway, another sends headers and then goes quiet. It asserts
 that the failure is reported, that the retry asks with a `Range` header, that the
-partial file is kept, and that the resumed download verifies and boots (29
-assertions; 6 of them fail against the previous `download()`). The log's resume
+partial file is kept, and that the resumed download verifies and boots — 6 of those
+checks fail against the previous `download()`.
 line is part of the log contract (`gateway:test`), so the card can show
 "Resuming the download…" rather than appearing to start over.
 
@@ -636,7 +636,9 @@ URL. Whatever it was, the app's response to it was the bug:
 Guards: `payload:install-test` reproduces the phone's case (a manifest URL that
 404s must not stop the install), a 500 that is retried and then succeeds, a
 dropped socket that recovers within one attempt, and an endpoint that always
-drops to prove the partial file survives for the next run — 34 assertions.
+drops to prove the partial file survives for the next run. Every check in that file is
+a real run of the real bootstrap: 61 of them, including the addon that segfaults on
+load and the boot that recovers from it (§5t).
 
 ### 5k. A status that does not lie, and a log that survives a death
 
@@ -1026,6 +1028,10 @@ cannot dlopen a library and cannot itself be the crash it is reporting on. A
 package that is import-only is reported separately from one that is missing,
 because the two mean different things.
 
+The addon probe in 5t does the opposite — it really loads each module — and that
+is a deliberate exception to this rule, with its reasoning and its guardrail
+spelled out there.
+
 ### 5r. The cache directory Next.js probes for
 
 Upstream's Termux guide names a failure that has nothing to do with native
@@ -1078,6 +1084,118 @@ the URL it tried (`Network error — no answer from http://127.0.0.1:20128`)
 instead of leaving you to guess which scheme it used. And a URL *already saved*
 as https-to-loopback is repaired when settings load, because the screen that
 would let you fix it sits behind the gate that URL cannot pass.
+
+### 5t. The crash that names itself: the addon probe
+
+The phone report that started this: the payload installed, **Start the gateway**
+was pressed, and the app disappeared — repeatedly. The boot record ended at
+`loading server.js`, Android said SIGSEGV, and the crash dump was empty, which is
+normal for a fatal signal the crash handler never claimed. Sections 5o–5q cover the
+two library faults that can be *predicted* from the file's bytes: wrong CPU, wrong
+libc. This is the case that cannot be predicted, only survived:
+
+- the library can be the right CPU and the right libc and still die on `dlopen` —
+  a mis-built addon, a `.so` whose own dependency is missing, a truncated file;
+- the death happens between two instructions inside the loader, so no handler runs,
+  nothing is flushed, and no log anywhere says which file it was;
+- and it happens again on every start, because each boot reaches the same file. A
+  phone in this state is a crash loop with no evidence in it.
+
+**Load each native module by name, before the real boot.** `bootstrap.mjs` walks the
+payload's `node_modules` for `.node` files and requires them one at a time, writing
+the name to the boot record *before* each attempt:
+
+```
+[gateway] boot: probing node_modules/sharp/build/Release/sharp.node
+```
+
+`bootTrace` fsyncs, so that line is on disk before the loader is entered. If the
+process dies there, it is the last line of the record — and the next boot reads the
+record back and knows which file killed the last one.
+
+**What the next boot does with that knowledge.** The module that was being loaded
+when the previous boot died is renamed to `<file>.disabled`, and the boot carries on
+without it:
+
+```
+[gateway] native addon probe: node_modules/sharp/build/Release/sharp.node killed
+          the previous boot (a known-optional accelerator) — renamed to .disabled
+          so the gateway can start
+```
+
+Disabled even when it is *not* one of the known-optional addons, which is the
+decision worth reading twice. The alternative use of that knowledge is to leave a
+file in place that a fatal signal has already been traced to — a promise to restart
+into the same crash forever, which is the exact state this exists to end. Renaming
+is not deleting: the file is still there, the log names it, and reinstalling the
+payload brings it back. A gateway that starts with one library missing beats a
+gateway that cannot start at all; and a payload whose JavaScript genuinely needs
+that library will say so in its own error, in its own words, instead of taking the
+process down without saying anything.
+
+The choice is remembered in `<GATEWAY_DIR>/native-probe.json` — the addons that
+loaded, the addons that were disabled, tied to the install's `installedAt` — so:
+
+- the probe runs before the first boot of a fresh install, while a crash is still
+  unexplained and one pass is cheap;
+- it runs again after any boot that never reached `the server is answering`;
+- it never runs again once the gateway has come up, and a module already proven is
+  not loaded twice, so the cost is paid once per install rather than once per start.
+
+**Why this probe is allowed to load, when 5q refuses to.** 5q's rule exists because
+a check that dlopens a bad library becomes the crash it was trying to report — and
+when the only place a crash could be seen was the payload's own log, that rule was
+simply correct. What changed is not the library and not the risk: it is that
+`bootTrace` now writes and fsyncs a line *before* the thing it is about to do. A
+death inside the probe is therefore attributable in a way a death inside the
+payload's import never was, and it is repairable, because the next boot reads the
+record back and moves the named file aside. The probe takes the same fatal signal the
+gateway was already taking — one boot earlier, with the file's name already on disk.
+
+The cost is stated plainly, because it is real: a module the payload would never
+have loaded is loaded anyway, and a module that dies on `dlopen` for reasons
+unrelated to this boot will now be seen, and disabled, even though this boot would
+have survived it. That trade is only worth making because disabling is recoverable —
+a rename, a log line, a reinstall — and because the alternative is the failure this
+section exists for: the payload's import dying with no name attached to it.
+
+**What the app shows.** `bootRecordStep` already displays the record's last line,
+and `describeBootTrace` gained the matching case, so a boot that stopped at a probe
+line is explained rather than reported as having stopped at the runtime starting:
+
+> The process died while loading the payload's native module
+> node_modules/sharp/build/Release/sharp.node — a fatal signal inside that library,
+> which no handler can catch and nothing can log. The gateway moves it aside on the
+> next start and carries on without it, so a second start should come up.
+
+That sentence is also why a second start *is* expected to work: the evidence is read
+from a file the dead process left behind, so the recovery needs nothing from the
+crash itself — not the app noticing, not the tombstone surviving, not the user
+pressing the button twice.
+
+**Proven on the runner.** `payload:install-test` builds a payload containing a real
+native addon that segfaults inside its constructor, compiled without a libc on
+purpose — a library carrying `GLIBC_` symbols is quarantined by the check in 5q, so
+a sloppier fixture would be moved aside before it ever crashed and the case would
+test nothing while passing. The test asserts the whole sequence: the boot record
+names the addon, the payload's own code never runs, the gateway log claims nothing;
+then the *next* boot moves the addon aside, serves `/healthz`, records it in
+`native-probe.json`, and a third boot probes nothing at all.
+**What the phone had already told us.** The report this section answers was not a
+mystery from the app's side: the card said the payload was installed, the log said
+`native modules in the payload: 6 of 8 resolvable`, and the boot record stopped at
+`loading server.js` with a SIGSEGV immediately after. Six natively-backed
+dependencies, one of them fatal to load, and no way from the outside to tell which.
+That is the whole gap the probe closes — it is a way to ask each of the six.
+
+**Why the probe is not run in a child process.** Isolation would be nicer: a crash
+in a subprocess would cost the user nothing. It is not available here, because the
+runtime is a library inside the app's own process — there is no `node` executable on
+Android to spawn, and `child_process` has nothing to spawn. The probe therefore runs
+in the same process as the boot it is protecting, which is why the design is a boot
+record and a repair on the next start rather than a test that cannot fail the thing
+it tests.
+
 
 ## 6. What will not work on-device
 

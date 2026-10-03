@@ -126,7 +126,7 @@ Two behaviours worth knowing, both learned the hard way:
 
 ## Verification
 
-`npm run api:test` (102 assertions) compiles the real client and runs it against a
+`npm run api:test` (112 assertions) compiles the real client and runs it against a
 fake gateway on loopback — a real HTTP server, not a stubbed fetch. It covers URL
 building (`192.168.1.10:20128` is `http`, not `https`), the readers, the error
 surfaces, cookie capture and replay, mid-UTF-8 SSE chunk splitting, chat path

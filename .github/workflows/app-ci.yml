@@ -14,10 +14,13 @@
 #   8. npm run runtime:contract  (the JS, Kotlin and manifest surfaces agree)
 #   9. npm run url:test      (a bare `192.168.1.10:20128` is not https)
 #  10. npm run surfaces:test (the generated catalog matches its snapshot)
-#  11. npm run api:test      (the native client against a real fake gateway:
+#  11. npm run surfaces:coverage (every surface in that catalog is reachable from a
+#      real screen, every custom route exists on disk, every icon exists in the
+#      font, and every data surface reads an API path rather than a page)
+#  12. npm run api:test      (the native client against a real fake gateway:
 #      URL rules, session cookie, error surfaces, SSE chat, and the invariant
 #      that no screen renders a WebView and every menu entry is a real screen)
-#  12. expo export           (Metro/Hermes bundle → proves routing + imports)
+#  13. expo export           (Metro/Hermes bundle → proves routing + imports)
 #
 # Step 2 exists because GitHub rejects a workflow file whose expressions use
 # a context that isn't available at that key (e.g. `secrets` in an `if:`).
@@ -112,6 +115,13 @@ jobs:
       # disagree, one of them was edited without the other.
       - name: Check the surface catalog is current
         run: npm run surfaces:test
+
+      # The catalog being *correct* is not the same as the app being able to show
+      # it. A surface whose custom route does not exist, or whose data path points
+      # at a page instead of the API, passes every other check and opens as a blank
+      # screen on the phone — which is the one place no one can read a console.
+      - name: Check every surface is reachable natively
+        run: npm run surfaces:coverage
 
       - name: Check the native gateway client
         run: npm run api:test

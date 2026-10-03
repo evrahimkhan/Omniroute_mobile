@@ -2235,10 +2235,11 @@
       "icon": "book",
       "section": "Help",
       "group": null,
-      "kind": "external",
+      "kind": "local",
       "path": null,
       "page": "/docs",
-      "apis": []
+      "apis": [],
+      "note": "The dashboard renders its own documentation as pages inside the browser. There is no gateway API behind it, and the app has no documentation site to open \u2014 so this says so instead of pretending to."
     },
     {
       "id": "issues",

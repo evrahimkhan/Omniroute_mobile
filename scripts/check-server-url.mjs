@@ -71,7 +71,7 @@ function compiled() {
 }
 
 const { out, serverUrl, gateway } = compiled();
-const { normalizeServerUrl, repairServerUrl, assumedScheme } = serverUrl;
+const { normalizeServerUrl, repairServerUrl, assumedScheme, isLoopbackAddress } = serverUrl;
 
 try {
   // --- the case from the phone: a bare loopback address ----------------------
@@ -228,6 +228,19 @@ try {
     'settings repair a saved URL on load, so a bad one heals',
     settingsSrc.includes('repairServerUrl(saved)')
   );
+
+  // "Is the gateway on this phone?" is a different question from "is this local?",
+  // and a screen that confuses them offers to start a gateway on a machine it
+  // cannot reach. The LAN half is the one worth pinning: it *is* local, and it must
+  // not be treated as this device.
+  check('the loopback address the app defaults to', isLoopbackAddress('http://127.0.0.1:20128') === true);
+  check('localhost, the other spelling of the same thing', isLoopbackAddress('http://localhost:20128') === true);
+  check('loopback in IPv6, brackets and all', isLoopbackAddress('http://[::1]:20128') === true);
+  check('a bare loopback address with no scheme', isLoopbackAddress('127.0.0.1:20128') === true);
+  check('a LAN address is local but not this phone', isLoopbackAddress('http://192.168.1.10:20128') === false);
+  check('a tunnel is neither', isLoopbackAddress('https://example.trycloudflare.com') === false);
+  check('an unset address is not this phone either', isLoopbackAddress('') === false);
+  check('and a malformed one does not become one by accident', isLoopbackAddress('http:///nope') === false);
 
   const installerSrc = readFileSync(join(root, 'lib', 'gatewayInstaller.ts'), 'utf8');
   check(

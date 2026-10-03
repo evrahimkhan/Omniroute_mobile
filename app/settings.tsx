@@ -134,16 +134,32 @@ export default function SettingsScreen() {
         <SectionHeader title="SESSION" />
         <Card>
           <ListRow
-            icon={session.authenticated === false ? 'lock-outline' : 'shield-check-outline'}
-            iconColor={session.authenticated === false ? '#f5a524' : theme.success}
+            icon={
+              session.authenticated === false
+                ? 'lock-outline'
+                : session.authenticated
+                  ? 'shield-check-outline'
+                  : 'shield-off-outline'
+            }
+            // Green for a state that was never established is how this app came to
+            // claim it was signed in to a website: `authenticated` has three
+            // answers, and only two of them mean anything. `null` is "unknown", so
+            // it is drawn as unknown.
+            iconColor={
+              session.authenticated === false ? '#f5a524' : session.authenticated ? theme.success : theme.textMuted
+            }
             title={
               session.authenticated === false
                 ? 'The gateway wants a session'
                 : session.authenticated
-                  ? 'Signed in (or not needed)'
-                  : 'Unknown'
+                  ? 'Signed in'
+                  : 'Session state unknown'
             }
-            subtitle="A local gateway trusts requests from this phone; a password on it changes that."
+            subtitle={
+              session.authenticated === null
+                ? 'Nothing has confirmed the gateway is answering yet. The session screen checks it directly.'
+                : 'A local gateway trusts requests from this phone; a password on it changes that.'
+            }
           />
           <View style={styles.cardBody}>
             <Field
@@ -156,7 +172,13 @@ export default function SettingsScreen() {
             />
             <View style={styles.row}>
               <Button label="Save token" icon="key-plus" variant="secondary" loading={savingToken} onPress={saveToken} style={styles.flex} />
-              <Button label="Sign in" icon="login" variant="secondary" onPress={() => router.push('/sign-in')} style={styles.flex} />
+              <Button
+                label={session.authenticated === false ? 'Sign in' : 'Session & sign-in'}
+                icon={session.authenticated === false ? 'login' : 'shield-search'}
+                variant="secondary"
+                onPress={() => router.push('/sign-in')}
+                style={styles.flex}
+              />
             </View>
             {session.cookie ? (
               <Button

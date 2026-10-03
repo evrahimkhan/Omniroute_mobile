@@ -164,7 +164,7 @@ export const SURFACES: Surface[] = [
   { id: 'settings-cache', title: 'Cache', subtitle: '', icon: 'database-outline', section: 'Configuration', kind: 'config', path: '/api/cache', method: 'post', page: '/dashboard/settings/cache' },
   { id: 'settings-sidebar', title: 'Sidebar', subtitle: '', icon: 'menu', section: 'Configuration', kind: 'local', path: '/api/settings', note: 'Which items the browser dashboard shows in its sidebar. The app has its own catalog.', page: '/dashboard/settings/sidebar' },
   // ── Help ──
-  { id: 'docs', title: 'Docs', subtitle: '', icon: 'book-open-page-variant-outline', section: 'Help', kind: 'external', page: '/docs' },
+  { id: 'docs', title: 'Docs', subtitle: '', icon: 'book-open-page-variant-outline', section: 'Help', kind: 'local', note: 'The dashboard renders its own documentation as pages inside the browser. There is no gateway API behind it, and the app has no documentation site to open — so this says so instead of pretending to.', page: '/docs' },
   { id: 'issues', title: 'Issues', subtitle: '', icon: 'bug-outline', section: 'Help', kind: 'external', page: 'https://github.com/diegosouzapw/OmniRoute/issues' },
   { id: 'changelog', title: 'Changelog', subtitle: '', icon: 'calendar-clock-outline', section: 'Help', kind: 'local', path: '/api/settings', note: 'Release notes are published with the project.', page: '/dashboard/changelog' },
 ];

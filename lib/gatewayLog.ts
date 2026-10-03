@@ -274,7 +274,7 @@ export function describeBootTrace(text: string): string | null {
   if (match(/^the payload is installed$/)) {
     return 'The process died after installing the payload and before starting it.';
   }
-  match(/^runtime ready on node /);
+  // No case matched: the record stopped early, which is the sentence below.
   return 'The boot record stopped at the runtime starting, before anything else could be recorded.';
 }
 

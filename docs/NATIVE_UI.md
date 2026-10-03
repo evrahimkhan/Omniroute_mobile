@@ -126,7 +126,15 @@ Two behaviours worth knowing, both learned the hard way:
 
 ## Verification
 
-`npm run api:test` (112 assertions) compiles the real client and runs it against a
+`npm run surfaces:coverage` (22 assertions) is the check behind the claim that the
+conversion is *complete*: it compiles the generated catalog and asserts every
+surface sits in exactly one section, that the 7 bespoke screens exist as route files
+on disk, that every data surface reads an `/api/…` path rather than a page, that
+every icon exists in the font's glyph map, and that nothing claims to open a URL it
+does not have. It prints the counts it verified, so the numbers below are generated
+rather than remembered.
+
+`npm run api:test` (119 assertions) compiles the real client and runs it against a
 fake gateway on loopback — a real HTTP server, not a stubbed fetch. It covers URL
 building (`192.168.1.10:20128` is `http`, not `https`), the readers, the error
 surfaces, cookie capture and replay, mid-UTF-8 SSE chunk splitting, chat path

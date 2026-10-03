@@ -60,6 +60,24 @@ export function isLocalHost(host: string): boolean {
   );
 }
 
+/**
+ * Is this address the device the app is running on, rather than a machine nearby?
+ *
+ * `isLocalHost` answers the scheme question — loopback *and* the LAN both speak
+ * plain http — which is too broad for the screens that offer to start the gateway
+ * on this phone. Only loopback means "this device": a 192.168 address is a
+ * different machine, and "Start the gateway here" would be nonsense there.
+ */
+export function isLoopbackAddress(serverUrl: string): boolean {
+  if (!serverUrl) return false;
+  try {
+    const host = new URL(normalizeServerUrl(serverUrl)).hostname.replace(/^\[|\]$/g, '');
+    return LOOPBACK.test(host);
+  } catch {
+    return false;
+  }
+}
+
 /** The scheme to use for input that did not name one. */
 export function assumedScheme(raw: string): 'http' | 'https' {
   const authority = raw.trim().split(/[/?#]/)[0];

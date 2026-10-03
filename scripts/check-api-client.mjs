@@ -703,6 +703,36 @@ try {
     catalog.SECTIONS.every((section) => typeof section.title === 'string' && section.title.length > 0)
   );
   check('the old hand-written menu is gone', !existsSync(join(root, 'lib', 'features.ts')));
+
+  // --- the session state must never be guessed ------------------------------
+  //
+  // `authenticated` has three answers and the first version of the session screen
+  // had two. Everything that went wrong on a phone — a green "signed in" over a
+  // website, "nothing to do" over a gateway that was not running, the form hidden
+  // behind that message — came from reading `null` as good news. These assertions
+  // are textual on purpose: the bug was a missing branch, and a missing branch is
+  // exactly what an absent string proves.
+  const signIn = readFileSync(join(root, 'app', 'sign-in.tsx'), 'utf8');
+  check('the session screen asks the gateway instead of inferring from the session', /checkGateway\(/.test(signIn));
+  check('it does not claim the gateway is answering when nothing said so', !/is answering this app/.test(signIn));
+  check(
+    'unknown is its own state, not "nothing to do"',
+    /status === null/.test(signIn) && !/Nothing to do/.test(signIn)
+  );
+  check('it still offers the password form when the state is unknown', /showForm/.test(signIn) && /reached/.test(signIn));
+  check(
+    'the settings row colours unknown differently from signed in',
+    /'shield-off-outline'/.test(readFileSync(join(root, 'app', 'settings.tsx'), 'utf8'))
+  );
+  check(
+    '"start it on this phone" is offered only for a loopback address',
+    /isLoopbackAddress/.test(signIn) &&
+      /export function isLoopbackAddress/.test(readFileSync(join(root, 'lib', 'serverUrl.ts'), 'utf8'))
+  );
+  check(
+    'the session screen cannot re-probe itself in a loop',
+    /refreshRef/.test(signIn) && !/\[serverUrl, session\]\)/.test(signIn)
+  );
 } finally {
   server.close();
   rmSync(out, { recursive: true, force: true });

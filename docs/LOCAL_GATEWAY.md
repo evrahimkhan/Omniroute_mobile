@@ -1217,6 +1217,63 @@ record and a repair on the next start rather than a test that cannot fail the th
 it tests.
 
 
+### 5u. The two numbers that were quietly wrong
+
+The phone got further than ever in b69 — the payload installed, the probe named the
+library that had been killing it, and the crash changed from SIGSEGV to **SIGABRT**.
+A different signal is a different fault, and both of the remaining ones were
+measurements rather than code:
+
+**A heap cap borrowed from the wrong budget.** `heapCapMb` derived node's
+`--max-old-space-size` from `Runtime.maxMemory()` — the ceiling Android puts on this
+app's **Java** heap. V8 does not allocate from that heap: node's is native memory,
+bounded by the device. The two numbers are unrelated, so the derivation meant
+nothing: on a phone reporting 1.9 GB free of 7.4 GB, it produced a 341 MB cap, and
+a Next.js server with tens of thousands of modules is not a 341 MB program. V8
+reached the limit and aborted itself, which is what SIGABRT is.
+
+The cap now comes from `ActivityManager.MemoryInfo.availMem` over three, clamped to
+256–1024 MB. The ceiling is not paranoia: an unbounded native heap on a small phone
+invites the low-memory killer, and *its* victim leaves no trace at all — the exact
+failure the whole logging apparatus in this file exists to avoid. `runtime:contract`
+now asserts the negative too, that `heapCapMb` does **not** read `maxMemory()`,
+because that sentence is the one a future reader will be tempted to reinstate.
+
+**A Mach-O filed under "unreadable".** The payload scan reads 20 bytes of every
+`.node`/`.so` and asks for an ELF machine. A darwin binary has no ELF header, so the
+answer was `null`, and `null` was handled as *"could not read it, leave it alone"* —
+counted in the log as `unreadable` and left in the tree. But "no ELF header" and
+"this is a Mach-O" are different facts: the second one means `dlopen` will fault,
+because the loader reads far enough to be hurt. Every npm package ships the darwin
+and win32 prebuilds it happens to bundle, and the payload is assembled on a Linux
+runner that has no reason to strip them — so the phone was handed
+`onnxruntime/bin/napi-v6/darwin/arm64/onnxruntime_binding.node`, exactly the file the
+probe later named as the killer.
+
+The scan now classifies by magic before it gives up: Mach-O, universal binaries and
+Windows PE are moved out of the payload **before the first boot**, alongside the
+wrong-CPU and glibc cases, and the summary says which was which:
+
+```
+[gateway] moved 3 of 4 native libraries out of the payload — they cannot load on
+          this phone (1 for another CPU, 1 for a desktop libc, 1 for not being a
+          Linux binary at all), and loading one is a crash, or an error where
+          nothing is watching: …/sharp-darwin-arm64.node (Mach-O (built for macOS/iOS))
+```
+
+That turns the probe's *recovery* path into a *prevention* path: a first start
+should never touch one of these files, so there is no sacrificial crash left in the
+setup flow. `payload:install-test` writes a real Mach-O header for exactly this
+assertion.
+
+**And if V8 still aborts, it now has to say so.** The runtime starts with
+`--report-on-fatalerror --report-directory=<GATEWAY_DIR> --report-filename=node-report.json`,
+and the bootstrap reads that file back at the top of the next boot — the event, the
+heap at the time, the JavaScript frame — then deletes it, so yesterday's death is
+never reported as today's. A fatal error from C++ happens past every JS handler, so
+node's own report is the only account that exists; the file name is one more
+handshake between two languages, and `runtime:contract` asserts both sides of it.
+
 ## 6. What will not work on-device
 
 These are expected degradations; the UI must say so rather than pretend:

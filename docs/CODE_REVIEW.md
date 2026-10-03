@@ -47,6 +47,10 @@ which part, in each of three groups: superseded, fixed, still open.
 |---|---|---|
 | 1 | **High** | An installed gateway never updates itself. Unchanged, and the only finding that outlived both passes with its severity intact |
 | 7 | Medium | Home still runs four poll loops (10 s health, 10 s telemetry, 30 s providers, 15 s logs) while an install is unpacking ~44,000 files on the same device |
+| 21 | **High** | node's heap was capped by `Runtime.maxMemory()`, the **Java** budget, giving a Next.js server 341 MB on a phone with 1.9 GB free — it hit the cap and aborted (SIGABRT), which read as another crashing library. Fixed: sized from `availMem/3`, clamped 256–1024 MB, with the contract asserting `maxMemory()` is *not* used |
+| 22 | **High** | a `.node` that is not ELF was counted "unreadable" and left in the payload — including the arm64 **Mach-O** onnxruntime binding that segfaulted the first boot. Now classified by magic (Mach-O / universal / PE) and moved out before the first start, so the crash never happens rather than being recovered from |
+| 23 | Low | a V8 fatal error left no readable trace in the app; `--report-on-fatalerror` now lands a report the next boot prints and clears |
+
 | 20 | Medium | **Collections are read and delete only.** `lib/api/collection.ts` exposes exactly two verbs — `readCollection` and `deleteRow` — so the 32 collection surfaces can be inspected and removed but never created or edited. The dashboard's forms do all four. This is the largest remaining functional gap against the web UI, and it is a gap in the *engine*, not in a screen: 32 surfaces inherit it |
 | 9 | Low | `versionName` is stamped `1.0.0-bNN`, which is not a valid Play version name — harmless while the build is sideloaded, blocking the day it is not |
 | 10 | Low | The published manifest's `entry` is still ignored; the bootstrap guesses which of the two shapes it got and logs the answer |

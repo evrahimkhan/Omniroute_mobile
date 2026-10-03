@@ -56,21 +56,34 @@ private object NodeRuntimeNative {
 }
 
 /** One request to start the runtime, in the shape the app asked for it. */
-/**
- * The cap used when Android will not say how much memory the app may have.
- *
- * Deliberately conservative: too small a cap fails a boot that would have fitted
- * (loudly, with V8's own heap-limit message), while no cap fails it silently.
- */
-private const val DEFAULT_HEAP_CAP_MB = 320
-
-/**
- * The floor under the derived cap.
- *
- * A device that reports a tiny budget, or a runtime read that fails, must not
- * produce a heap too small to start node at all.
- */
-private const val MIN_HEAP_CAP_MB = 192
+  /**
+   * The cap used when Android will not say how much memory the device has free.
+   *
+   * Big enough for the payload to boot: 320 MB was, and a Next.js server with
+   * tens of thousands of modules reached the end of it and aborted.
+   */
+  private const val DEFAULT_HEAP_CAP_MB = 512
+  
+  /**
+   * The floor under the derived cap, and the ceiling over it.
+   *
+   * The floor keeps a device that reports nonsense from producing a heap node
+   * cannot start in. The ceiling is the more interesting of the two: node's heap
+   * is native memory, and a very large one on a small phone invites the low memory
+   * killer, whose victim leaves no trace at all — the failure mode this whole
+   * setting exists to avoid.
+   */
+  private const val MIN_HEAP_CAP_MB = 256
+  private const val MAX_HEAP_CAP_MB = 1024
+  
+  /**
+   * The name node writes its fatal-error report to, inside the gateway's own
+   * directory. Fixed rather than timestamped on purpose: the app reads one file
+   * (`node-report.json`) on the next boot, and the newest crash is the only one
+   * worth reporting. The bootstrap renames it after reading, so a stale account is
+   * never mistaken for this run's.
+   */
+  private const val NODE_REPORT_NAME = "node-report.json"
 
 internal data class RuntimeStartRequest(
   val scriptPath: String,
@@ -173,34 +186,31 @@ internal object NodeRuntimeHost {
    * logs.
    */
   /**
-   * The V8 heap node is allowed, in MB, derived from Android's own number.
+   * The V8 heap limit, in megabytes.
    *
-   * `Runtime.maxMemory()` is the limit Android enforces on this app's heap — the
-   * memory class, or the large class the manifest asks for — which makes it a
-   * fair statement of what this process can use. V8 has no idea about it: left
-   * alone it sizes its heap from the device's total memory, and on a phone with
-   * several gigabytes it will happily grow past what the system will tolerate.
-   * The system then kills the process, and a low-memory kill leaves nothing
-   * behind — no message, no stack, no exit code — which is exactly the death
-   * this code has been chasing: the payload unpacks, node starts the server, and
-   * the app is simply gone.
+   * It is NOT derived from `Runtime.maxMemory()`, and an earlier version of this
+   * function was. That number is the ceiling Android puts on this app's **Java**
+   * heap; V8 does not allocate from it. Node's heap is native memory, sized from
+   * the device, and the two budgets move independently — so `maxMemory()`/3 gave
+   * 341 MB on a phone reporting 1.9 GB free out of 7.4 GB, and the payload walked
+   * straight into that: a server of this size is not a 341 MB program. V8 then
+   * aborts itself (`FATAL ERROR: Reached heap limit`), which arrives as SIGABRT
+   * and looks from outside exactly like another bad native library.
    *
-   * Bounding V8 changes the outcome, not just the reporting: inside a heap limit
-   * it collects instead of growing, so a boot that was being killed can fit. If
-   * it still runs out, V8 aborts with `FATAL ERROR: Reached heap limit`, which
-   * prints — a diagnosable failure instead of a disappearance.
-   *
-   * Two thirds, because V8's heap is not the whole process: the payload's native
-   * modules (sharp, onnxruntime) and the runtime's own metadata allocate outside
-   * it, and the Java side of the app needs its share too. The floor keeps a
-   * pathological budget (or a device that reports nonsense) from producing a cap
-   * too small to boot at all.
+   * So the budget is what the device will actually spare: available RAM over
+   * three, leaving the rest for the OS, the WebView and the payload's own page
+   * cache, clamped into the range above. The low-memory killer is the reason for
+   * the ceiling rather than no cap at all — its victim leaves nothing behind,
+   * which is the one outcome worse than a heap that is too small.
    */
-  private fun heapCapMb(context: Context): Int {
-    val budget = runCatching { Runtime.getRuntime().maxMemory() / (1024 * 1024) }.getOrDefault(0L)
-    if (budget <= 0L) return DEFAULT_HEAP_CAP_MB
-    return (budget.toInt() * 2 / 3).coerceAtLeast(MIN_HEAP_CAP_MB)
-  }
+    private fun heapCapMb(context: Context): Int {
+      val availMb = runCatching {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        manager?.let { ActivityManager.MemoryInfo().also(manager::getMemoryInfo).availMem / (1024L * 1024L) }
+      }.getOrNull() ?: 0L
+      if (availMb <= 0L) return DEFAULT_HEAP_CAP_MB
+      return (availMb / 3L).toInt().coerceIn(MIN_HEAP_CAP_MB, MAX_HEAP_CAP_MB)
+    }
 
   fun memoryFacts(context: Context): String {
     val runtime = Runtime.getRuntime()
@@ -210,7 +220,7 @@ internal object NodeRuntimeHost {
     val largeHeap = (context.applicationInfo.flags and ApplicationInfo.FLAG_LARGE_HEAP) != 0
     val heapMaxMb = runtime.maxMemory() / (1024 * 1024)
     val heapUsedMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
-    return "memory: heap limit ${heapMaxMb} MB (node is capped at ${heapCapMb(context)} MB), " +
+      return "memory: java heap limit ${heapMaxMb} MB (not node's budget), node heap cap ${heapCapMb(context)} MB, " +
       "used ${heapUsedMb} MB, " +
       "device free ${info.availMem / (1024 * 1024)} MB of ${info.totalMem / (1024 * 1024)} MB, " +
       "lowMemory=${info.lowMemory}, largeHeap=$largeHeap"
@@ -444,7 +454,18 @@ internal object NodeRuntimeHost {
       // Node parses its own options from argv up to the script name, so the heap
       // cap has to go between them — after the script it would be handed to the
       // script as an argument instead.
-      val nodeFlags = listOf("--max-old-space-size=${heapCapMb(context)}")
+        val nodeFlags = listOf(
+          "--max-old-space-size=${heapCapMb(context)}",
+          // When V8 decides it cannot go on, it aborts the process — and an abort
+          // that leaves only a one-line message in a log the app may not reach is
+          // how a heap problem gets mistaken for a crashing library. The report is
+          // node's own account: the event, the heap at the time, and the JS frame it
+          // died in. The bootstrap reads it back on the next boot and prints the
+          // summary where the user can actually see it.
+          "--report-on-fatalerror",
+          "--report-directory=${gatewayDir(context).absolutePath}",
+          "--report-filename=$NODE_REPORT_NAME",
+        )
       val argv = (listOf("node") + nodeFlags + request.scriptPath + request.args).toTypedArray()
       val envPairs = env.map { (key, value) -> "$key=$value" }.toTypedArray()
 

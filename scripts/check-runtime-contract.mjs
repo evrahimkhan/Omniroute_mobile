@@ -440,27 +440,64 @@ check(
 // The kill this whole section exists for: V8 sizes its heap from the device's
 // memory unless told otherwise, so with `largeHeap` it is free to grow past what
 // Android will tolerate — and that kill leaves nothing behind.
-check(
-  'node is given a heap limit derived from the app\'s real budget',
-  sources.host.includes('Runtime.getRuntime().maxMemory()') &&
-    sources.host.includes('--max-old-space-size=${heapCapMb(context)}'),
-  'an unbounded V8 heap is a silent low-memory kill waiting for a big payload'
-);
-
-check(
-  'the limit is placed where node parses options, not after the script',
-  sources.host.includes('listOf("node") + nodeFlags + request.scriptPath + request.args') &&
-    sources.host.includes('(nodeFlags + request.args).joinToString(" ")'),
-  'after the script name an option is just an argument, and the cap never applies'
-);
-
-check(
-  'a wrong budget cannot produce a heap too small to start node',
-  sources.host.includes('MIN_HEAP_CAP_MB') &&
-    sources.host.includes('.coerceAtLeast(MIN_HEAP_CAP_MB)') &&
-    sources.host.includes('runCatching { Runtime.getRuntime().maxMemory()'),
-  'a failed read or a nonsense number must not turn into a boot that cannot fit'
-);
+  // The budget itself. An earlier version derived node's heap from
+  // `Runtime.maxMemory()` — the ceiling Android puts on this app's *Java* heap —
+  // which produced 341 MB on a phone with 1.9 GB free, because V8 does not
+  // allocate from the Java heap at all. The payload then hit its own limit and
+  // aborted, and the abort looked exactly like another crashing library. So the
+  // contract here is the negative as much as the positive: the function that sizes
+  // node must not read the Java budget.
+  const heapFunction = (() => {
+    const at = sources.host.indexOf('private fun heapCapMb(');
+    if (at < 0) return '';
+    const brace = sources.host.indexOf('{', at);
+    let depth = 0;
+    for (let i = brace; i < sources.host.length; i += 1) {
+      if (sources.host[i] === '{') depth += 1;
+      else if (sources.host[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return sources.host.slice(at, i + 1);
+      }
+    }
+    return '';
+  })();
+  check(
+    "node's heap is sized from the device's free memory, not the Java heap limit",
+    heapFunction.includes('availMem') &&
+      !heapFunction.includes('maxMemory()') &&
+      sources.host.includes('--max-old-space-size=${heapCapMb(context)}'),
+    heapFunction.includes('maxMemory()')
+      ? 'heapCapMb still reads the Java budget: V8 allocates natively, and that number is not its ceiling'
+      : 'a cap that is not the process budget fails a server this size'
+  );
+  
+  check(
+    'a nonsense budget cannot produce a heap too small to boot, or too big to survive',
+    heapFunction.includes('.coerceIn(MIN_HEAP_CAP_MB, MAX_HEAP_CAP_MB)') &&
+      sources.host.includes('private const val MAX_HEAP_CAP_MB') &&
+      sources.host.includes('runCatching'),
+    'the ceiling is the low-memory killer talking: an unbounded native heap is a silent kill'
+  );
+  
+  check(
+    'the memory line says which budget is which',
+    sources.host.includes("not node's budget"),
+    'one number for the Java heap and one for node, printed side by side, is how the wrong one gets trusted again'
+  );
+  
+  // V8's fatal errors abort the process from C++, past every JS handler, so the
+  // only account of them is the report node writes before it dies — and it is only
+  // worth anything if the side that writes the file name and the side that read it
+  // agree on it.
+  check(
+    'a node fatal error leaves a report the next boot reads back',
+    sources.host.includes('"--report-on-fatalerror"') &&
+      sources.host.includes('"--report-filename=$NODE_REPORT_NAME"') &&
+      sources.host.includes('"--report-directory=${gatewayDir(context).absolutePath}"') &&
+      sources.bootstrap.includes("const NODE_REPORT_NAME = 'node-report.json';") &&
+      sources.bootstrap.includes('await reportPreviousFatalError(gatewayDir);'),
+    'the flag writes into GATEWAY_DIR and the bootstrap reads the same name, or the report is never shown'
+  );
 
 check(
   'no Kotlin source leaves a string literal open',

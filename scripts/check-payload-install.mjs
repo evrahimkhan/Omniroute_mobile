@@ -227,6 +227,15 @@ async function main() {
   writeElf(join(sharpDir, 'sharp.node'), otherMachine);
   writeElf(join(sharpDir, 'libvips.so'), hostMachine);
   writeElf(join(sharpDir, 'libvips-desktop.so'), hostMachine, '\x00GLIBC_2.34\x00');
+    // The file that started all of this. A darwin build is not "an ELF we cannot
+    // read": it is a Mach-O, and on Android that is a certainty rather than a
+    // maybe — loading one faults inside the dynamic linker, which kills the host
+    // app with a signal and no message. The payload the phone was given carried
+    // arm64 *macOS* onnxruntime bindings for exactly this reason.
+    const macho = Buffer.alloc(32);
+    macho.writeUInt32LE(0xfeedfacf, 0); // MH_MAGIC_64, little-endian
+    macho.writeUInt32LE(0x0100000c, 4); // CPU_TYPE_ARM64
+    writeFileSync(join(sharpDir, 'sharp-darwin-arm64.node'), macho);
   writeFileSync(join(standalone, 'server.js'), fixtureServer('STANDALONE'));
   symlinkSync('server.js', join(standalone, 'entry-link.js'));
 
@@ -458,9 +467,10 @@ __attribute__((constructor)) static void crash_on_load(void) {
   // that touches it is a crash with no output, or an error thrown wherever the
   // require happened to be. So both reasons are removed before the boot.
   check(
-    'libraries that cannot load on a phone are moved out of the payload',
-    /moved 2 of 3 native libraries out of the payload/.test(first.output) &&
-      /1 for another CPU, 1 for a desktop libc/.test(first.output)
+    'libraries that cannot load on this phone are moved out of the payload, by format too',
+    /moved 3 of 4 native libraries out of the payload/.test(first.output) &&
+      /1 for another CPU, 1 for a desktop libc, 1 for not being a Linux binary at all/.test(first.output) &&
+      /sharp-darwin-arm64\.node \(Mach-O \(built for macOS\/iOS\)\)/.test(first.output),
   );
   check(
     'and the reason is named per file, so the next fix is obvious',
@@ -831,7 +841,7 @@ __attribute__((constructor)) static void crash_on_load(void) {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 69;
+  const total = 70;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

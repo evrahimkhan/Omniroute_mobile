@@ -52,6 +52,15 @@ import { createGunzip } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+/**
+ * The fatal-error report node writes, named by the runtime that starts it.
+ *
+ * Two declarations of one file name — Kotlin writes it, this reads it — so
+ * `npm run runtime:contract` asserts the literal on both sides, the way it does
+ * for every other handshake between the two languages.
+ */
+const NODE_REPORT_NAME = 'node-report.json';
+
 const MARKER = 'install.json';
 const PAYLOAD_NAME = 'payload.tar.gz';
 /** Bytes between progress lines. Long installs must not look like a hang. */
@@ -261,6 +270,58 @@ function openBootLog(dir) {
     fatal(reason);
   });
 }
+
+/**
+ * What node said about the last time it killed itself, if it said anything.
+ *
+ * A V8 fatal error — the heap limit being the one that matters here — aborts the
+ * process from C++, past every JavaScript handler. The runtime is therefore started
+ * with `--report-on-fatalerror`, which makes node write a machine-readable account
+ * of the abort before it dies: the event, the heap at the time, and the JS frame it
+ * was in. Reading that back on the *next* boot is what separates "the payload crashes
+ * for no reason" from "the payload needs a bigger heap than it was given", and the
+ * file is deleted afterwards so yesterday's death is never reported as today's.
+ */
+async function reportPreviousFatalError(gatewayDir) {
+  const file = path.join(gatewayDir, NODE_REPORT_NAME);
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return;
+  }
+  const parts = [];
+  let report = null;
+  try {
+    report = JSON.parse(text);
+  } catch {
+    parts.push(`unreadable (${fileSize(file)} bytes)`);
+  }
+  if (report) {
+    const header = report.header || {};
+    if (header.event) parts.push(`event ${header.event}`);
+    if (header.dumpEventReason) parts.push(`reason ${header.dumpEventReason}`);
+    const heap = (report.process && report.process.nodeJsHeap) || {};
+    if (heap.memoryLimit) {
+      parts.push(`heap ${Math.round((heap.memoryUsed || 0) / 1048576)} of ${Math.round(heap.memoryLimit / 1048576)} MB used`);
+    }
+    const stack = report.javascriptStack || {};
+    if (stack.message) parts.push(String(stack.message).split('\n')[0].trim());
+    const frame = Array.isArray(stack.frames) ? stack.frames[0] : null;
+    if (frame) {
+      parts.push(`at ${frame.functionName || '(anonymous)'} (${frame.fileName || '?'}:${frame.lineNumber ?? 0})`);
+    }
+    if (!parts.length) parts.push('a report with no recognised fields');
+  }
+  log(`the previous run ended in a node fatal error: ${parts.join(', ')}`);
+  bootTrace('read a node fatal-error report from the previous run');
+  try {
+    await fs.rm(file, { force: true });
+  } catch {
+    // Leaving it is only a repeat of this line; deleting it is not worth a crash.
+  }
+}
+
 
 function log(...args) {
   const line = `[gateway] ${args.join(' ')}`;
@@ -708,6 +769,40 @@ function machineName(code) {
  * cheap enough to do before every boot, and it is the difference between "node
  * crashed" and "this file is for the wrong CPU".
  */
+/**
+ * A binary in a container Android cannot load at all, or null.
+ *
+ * `elfMachine` answers null for anything that is not ELF, and null used to mean
+ * "unreadable, leave it alone". That is how a Mach-O survived into the payload the
+ * phone was given: on Android a `.node` that is not ELF is not a maybe — it is a
+ * file `dlopen` faults on — and every npm package ships the darwin and win32
+ * prebuilds it happens to bundle. A payload assembled on a Linux runner therefore
+ * carries arm64 *macOS* binaries beside the Linux ones, and requiring the wrong one
+ * is the crash this scan exists to prevent.
+ */
+function foreignFormat(file) {
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(8);
+      if (readSync(fd, head, 0, 8, 0) < 8) return null;
+      const magic = head.readUInt32LE(0);
+      // Mach-O, both byte orders, 32-bit and 64-bit.
+      if (magic === 0xfeedface || magic === 0xfeedfacf || magic === 0xcefaedfe || magic === 0xcffaedfe) {
+        return 'Mach-O (built for macOS/iOS)';
+      }
+      if (magic === 0xcafebabe || magic === 0xbebafeca) return 'universal binary (not ELF)';
+      // PE/COFF: "MZ" is the whole test a Windows binary needs.
+      if (head[0] === 0x4d && head[1] === 0x5a) return 'Windows PE';
+      return null;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
 function elfMachine(file) {
   try {
     const fd = openSync(file, 'r');
@@ -824,10 +919,18 @@ async function quarantineForeignLibraries(appDir, quarantineDir, installedAt) {
     item.libc = libcFlavour(item.file);
   }
   const wrongLibc = candidates.filter((item) => item.libc);
-  const unloadable = [...wrongArch, ...wrongLibc];
+    // Anything that is not ELF gets the format test too, because "no ELF header
+    // here" and "this is a Mach-O" are different facts — and only one of them is a
+    // crash waiting to happen.
+    for (const item of binaries) {
+      if (item.machine === null) item.format = foreignFormat(item.file);
+    }
+    const wrongFormat = binaries.filter((item) => item.machine === null && item.format);
+
+    const unloadable = [...wrongArch, ...wrongLibc, ...wrongFormat];
 
   if (!unloadable.length) {
-    const unreadable = binaries.length - binaries.filter((item) => item.machine !== null).length;
+      const unreadable = binaries.filter((item) => item.machine === null && !item.format).length;
     if (installedAt && stampPath) {
       try {
         writeFileSync(
@@ -849,7 +952,8 @@ async function quarantineForeignLibraries(appDir, quarantineDir, installedAt) {
     return;
   }
 
-  const reasonFor = (item) => (item.libc ? `desktop ${item.libc}` : machineName(item.machine));
+    const reasonFor = (item) =>
+      item.format ? item.format : item.libc ? `desktop ${item.libc}` : machineName(item.machine);
   const moved = [];
   const failed = [];
   for (const item of unloadable) {
@@ -874,8 +978,8 @@ async function quarantineForeignLibraries(appDir, quarantineDir, installedAt) {
   if (moved.length) {
     log(
       `moved ${moved.length} of ${binaries.length} native libraries out of the payload — they cannot load on this ` +
-        `phone (${wrongArch.length} for another CPU, ${wrongLibc.length} for a desktop libc), and loading one is a ` +
-        `crash, or an error where nothing is watching: ${named}`
+          `phone (${wrongArch.length} for another CPU, ${wrongLibc.length} for a desktop libc, ${wrongFormat.length} for ` +
+          `not being a Linux binary at all), and loading one is a crash, or an error where nothing is watching: ${named}`
     );
   }
   if (failed.length) {
@@ -1290,6 +1394,10 @@ async function main() {
   const previousBoot = readPreviousBoot(gatewayDir);
   openBootLog(gatewayDir);
   bootTrace(`runtime ready on node ${process.version} (pid ${process.pid})`);
+
+  // Before anything else can go wrong: if the last run was killed by node
+  // itself, that is the headline of this one.
+  await reportPreviousFatalError(gatewayDir);
 
   // Before anything Next.js is loaded: see prepareCacheDirectory.
   prepareCacheDirectory();

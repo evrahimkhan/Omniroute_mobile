@@ -19,6 +19,7 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { Button, Card, ErrorState, Loading, Screen, SearchField } from '../ui/kit';
 import ScreenHeader from '../ScreenHeader';
 import { useApiContext, useResource } from '../../lib/api/context';
+import { ApiError } from '../../lib/api/client';
 import { normalizeCollection } from '../../lib/api/collection';
 import { configGroups } from '../../lib/api/config';
 import { asArray, asRecord } from '../../lib/api/shape';
@@ -115,6 +116,10 @@ function SurfaceView({ surface }: { surface: Surface }) {
   }
 
   if (resource.error && resource.data === null) {
+    // If it's a 401/403 auth error, redirect to sign-in screen
+    if (resource.rawError instanceof ApiError && resource.rawError.needsSignIn) {
+      return <Redirect href="/sign-in" />;
+    }
     return (
       <Screen>
         <ScreenHeader title={surface.title} subtitle={surface.subtitle} />

@@ -174,6 +174,7 @@ export function describeError(error: unknown): string {
 export interface Resource<T> {
   data: T | null;
   error: string | null;
+  rawError: unknown | null;
   loading: boolean;
   reload: () => Promise<void>;
 }
@@ -194,6 +195,7 @@ export function useResource<T>(
   const { api } = useApiContext();
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rawError, setRawError] = useState<unknown | null>(null);
   const [loading, setLoading] = useState(Boolean(api && enabled));
   const runRef = useRef(run);
   runRef.current = run;
@@ -210,7 +212,10 @@ export function useResource<T>(
         setError(null);
       }
     } catch (err) {
-      if (generation.current === mine) setError(describeError(err));
+      if (generation.current === mine) {
+        setError(describeError(err));
+        setRawError(err);
+      }
     } finally {
       if (generation.current === mine) setLoading(false);
     }
@@ -224,7 +229,7 @@ export function useResource<T>(
     };
   }, [load]);
 
-  return { data, error, loading, reload: load };
+  return { data, error, rawError, loading, reload: load };
 }
 
 /**

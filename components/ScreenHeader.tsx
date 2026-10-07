@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
@@ -24,8 +25,9 @@ export default function ScreenHeader({
   right?: React.ReactNode;
   onBack?: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, { paddingTop: Math.max(insets.top, 10) }]}>
       <Pressable
         onPress={onBack ?? (() => (router.canGoBack() ? router.back() : router.navigate('/')))}
         hitSlop={12}

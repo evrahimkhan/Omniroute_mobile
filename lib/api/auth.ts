@@ -58,7 +58,7 @@ export function explainAuthFailure(status: number | null, url: string): string {
     return `The gateway at ${url} wants a dashboard session. Open Settings and sign in with the management password.`;
   }
   if (status === 403) {
-    return `The gateway at ${url} refused this request: that route is local-only, and this address is not the device itself. Use http://127.0.0.1:20128 to reach the gateway running on this phone.`;
+    return `The gateway at ${url} refused this request: that route is local-only, and this address is not the device itself. Use http://127.0.0.1:8080 to reach the gateway running on this phone.`;
   }
   return `The gateway at ${url} refused this request.`;
 }

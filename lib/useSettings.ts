@@ -29,7 +29,7 @@ export interface Settings {
  * gets an honest "no answer from http://127.0.0.1:20128" plus the install flow
  * in Settings, rather than a website pretending to be an API.
  */
-export const DEFAULT_SERVER_URL = 'http://127.0.0.1:20128';
+export const DEFAULT_SERVER_URL = 'http://127.0.0.1:8080';
 
 const KEY = 'omniroute.settings.v1';
 

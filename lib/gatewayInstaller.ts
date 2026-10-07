@@ -37,7 +37,7 @@ import {
 export { gatewayLogTail, gatewayProgress, type GatewayProgress } from './gatewayLog';
 
 /** The gateway's default port, and the loopback URL the WebView points at. */
-export const LOCAL_GATEWAY_PORT = 20128;
+export const LOCAL_GATEWAY_PORT = 8080;
 export const LOCAL_GATEWAY_URL = `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
 
 /**

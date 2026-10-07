@@ -225,7 +225,7 @@ export default function SignInScreen() {
           <ListRow
             icon="information-outline"
             title="Is the address the phone itself?"
-            subtitle="Only http://127.0.0.1:20128 is trusted as local. A LAN or tunnel address is treated as a remote client and always needs credentials."
+            subtitle="Only http://127.0.0.1:8080 is trusted as local. A LAN or tunnel address is treated as a remote client and always needs credentials."
           />
           <ListRow
             icon="open-in-new"

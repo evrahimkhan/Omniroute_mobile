@@ -1556,7 +1556,7 @@ async function main() {
   // Boot the gateway in-process. There is no second chance: the embedded
   // runtime starts once per app process.
   const serverEntry = path.resolve(appDir, entry);
-  process.env.PORT = process.env.GATEWAY_PORT || process.env.PORT || '20128';
+  process.env.PORT = process.env.GATEWAY_PORT || process.env.PORT || '8080';
   process.env.HOSTNAME = process.env.GATEWAY_HOST || process.env.HOSTNAME || '127.0.0.1';
   process.env.NODE_ENV = process.env.NODE_ENV || 'production';
   process.chdir(path.dirname(serverEntry));

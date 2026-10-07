@@ -26,6 +26,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '../../lib/theme';
@@ -47,12 +48,25 @@ export function Screen({
   style?: StyleProp<ViewStyle>;
   refreshControl?: React.ReactElement<RefreshControlProps>;
 }) {
-  const inner = padded ? [styles.screenPadding, style] : style;
+  const insets = useSafeAreaInsets();
+  const safePadding = {
+    paddingTop: Math.max(insets.top, 14),
+    paddingBottom: Math.max(insets.bottom, 14),
+    paddingHorizontal: 14,
+  };
+  const scrollSafePadding = {
+    paddingTop: Math.max(insets.top, 14),
+    paddingBottom: Math.max(insets.bottom, 14) + 96,
+    paddingHorizontal: 14,
+  };
+  const safeStyle = padded ? safePadding : { paddingHorizontal: 14 };
+  const scrollSafeStyle = padded ? scrollSafePadding : { paddingHorizontal: 14, paddingBottom: 96 };
+  
   if (scroll) {
     return (
       <ScrollView
         style={styles.screen}
-        contentContainerStyle={[styles.screenPadding, styles.scrollContent, style]}
+        contentContainerStyle={[scrollSafeStyle, styles.scrollContent, style]}
         keyboardShouldPersistTaps="handled"
         refreshControl={refreshControl}
       >
@@ -60,7 +74,7 @@ export function Screen({
       </ScrollView>
     );
   }
-  return <View style={[styles.screen, inner]}>{children}</View>;
+  return <View style={[styles.screen, safeStyle, style]}>{children}</View>;
 }
 
 export function SectionHeader({ title, right }: { title: string; right?: React.ReactNode }) {

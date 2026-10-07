@@ -264,10 +264,10 @@ class GatewayService : Service() {
 
     private const val EXTRA_REASON = "reason"
     private const val CHANNEL_ID = "omniroute-gateway"
-    private const val NOTIFICATION_ID = 20128
+    private const val NOTIFICATION_ID = 8080
     private const val REQUEST_OPEN = 0
     private const val REQUEST_STOP = 1
-    private const val DEFAULT_PORT = 20128
+    private const val DEFAULT_PORT = 8080
     private const val STATUS_INTERVAL_MS = 3000L
     private const val LOG_TAIL_BYTES = 4096
     private const val MAX_STATUS_CHARS = 120

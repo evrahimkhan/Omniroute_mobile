@@ -162,6 +162,28 @@ export async function readCollection(
 /** Rows the app is willing to draw at once; the rest are summarised. */
 export const RENDER_LIMIT = 300;
 
+export async function createRow(
+  api: Api,
+  path: string,
+  data: Record<string, unknown>
+): Promise<unknown> {
+  return await api.post<unknown>(path, data);
+}
+
+export async function updateRow(
+  api: Api,
+  path: string,
+  id: string,
+  data: Record<string, unknown>
+): Promise<unknown> {
+  const target = `${path}/${encodeURIComponent(id)}`;
+  try {
+    return await api.patch<unknown>(target, data);
+  } catch {
+    return await api.put<unknown>(target, data);
+  }
+}
+
 export async function deleteRow(api: Api, path: string, id: string): Promise<void> {
   await api.del<unknown>(`${path}/${encodeURIComponent(id)}`);
 }

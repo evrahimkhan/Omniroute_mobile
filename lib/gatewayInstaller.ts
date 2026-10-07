@@ -192,6 +192,55 @@ export interface StartGatewayOptions {
 export const STOPPED_REASON =
   'The gateway process was stopped. Reopen the app to start it again.';
 
+export interface PayloadUpdateCheck {
+  updateAvailable: boolean;
+  currentSha256: string | null;
+  latestSha256: string | null;
+  error?: string;
+}
+
+/**
+ * Check whether a newer gateway payload is available upstream.
+ * Compares the installed checksum from `install.json` with the manifest published on GitHub.
+ */
+export async function checkPayloadUpdate(
+  options: { sha256Url?: string } = {}
+): Promise<PayloadUpdateCheck> {
+  const marker = await readMarker();
+  if (!marker || !marker.sha256) {
+    return { updateAvailable: false, currentSha256: null, latestSha256: null };
+  }
+  const manifestUrl = options.sha256Url ?? DEFAULT_PAYLOAD_SHA256_URL;
+  try {
+    const res = await fetch(manifestUrl, { headers: { accept: 'application/json' } });
+    if (!res.ok) {
+      return {
+        updateAvailable: false,
+        currentSha256: marker.sha256,
+        latestSha256: null,
+        error: `HTTP ${res.status}`,
+      };
+    }
+    const data = await res.json();
+    const remoteSha =
+      typeof data === 'string'
+        ? data.trim().toLowerCase()
+        : (data?.sha256 ?? data?.sha ?? '').trim().toLowerCase();
+    if (!remoteSha) {
+      return { updateAvailable: false, currentSha256: marker.sha256, latestSha256: null };
+    }
+    const updateAvailable = remoteSha !== marker.sha256.trim().toLowerCase();
+    return { updateAvailable, currentSha256: marker.sha256, latestSha256: remoteSha };
+  } catch (err) {
+    return {
+      updateAvailable: false,
+      currentSha256: marker.sha256,
+      latestSha256: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export function isLocalGatewaySupported(): boolean {
   return NodeRuntime.isAvailable();
 }

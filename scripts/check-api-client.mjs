@@ -122,8 +122,9 @@ function startGateway() {
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
-        requests[requests.length - 1].body = body ? JSON.parse(body) : null;
-        run();
+        const parsed = body ? JSON.parse(body) : null;
+        requests[requests.length - 1].body = parsed;
+        run(parsed);
       });
     };
 
@@ -272,7 +273,7 @@ function startGateway() {
     }
 
     // A list route with the awkward bits: a wrapper key, a secret, a status word.
-    if (path === '/api/audit') {
+    if (path === '/api/audit' && req.method === 'GET') {
       return json(200, {
         total: 2,
         items: [
@@ -287,6 +288,15 @@ function startGateway() {
           { id: 'a2', name: 'login.failed', status: 'error', enabled: false, actor: 'me@example.com' },
         ],
       });
+    }
+    if (path === '/api/audit' && req.method === 'POST') {
+      return collect((body) => json(201, { id: 'a3', ...body, ok: true }));
+    }
+    if (path.startsWith('/api/audit/') && (req.method === 'PATCH' || req.method === 'PUT')) {
+      return collect((body) => json(200, { id: path.split('/').pop(), ...body, updated: true }));
+    }
+    if (path.startsWith('/api/audit/') && req.method === 'DELETE') {
+      return json(200, { ok: true, deleted: path.split('/').pop() });
     }
 
     // A numbers route, as the analytics pages see them.
@@ -585,6 +595,13 @@ try {
     'a single object still produces a row',
     collection.normalizeCollection({ status: 'ok', version: '3.8.52' }).rows.length === 1
   );
+
+  const newRow = await collection.createRow(session, '/api/audit', { name: 'audit.test' });
+  check('collections can create a row natively', newRow && newRow.id === 'a3' && newRow.ok === true);
+  const updated = await collection.updateRow(session, '/api/audit', 'a1', { status: 'paused' });
+  check('collections can update a row natively', updated && updated.updated === true && updated.status === 'paused');
+  await collection.deleteRow(session, '/api/audit', 'a1');
+  check('collections can delete a row natively', true);
 
   const stats = require(join(out, 'screens', 'stats.js'));
   const parsed = stats.parseStats(await session.get('/api/usage/demo'));

@@ -42,59 +42,56 @@ export async function checkGateway(serverUrl: string, timeoutMs = 10000): Promis
   const base = normalizeServerUrl(serverUrl);
   if (!base) return { ok: false, detail: 'No gateway URL configured', kind: 'nothing' };
 
-  const started = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let sawWebPage = false;
   let lastStatus: number | undefined;
   let answered = false;
 
-  try {
-    // Ask for the API this app actually uses, never for `/`.
-    //
-    // Falling back to the dashboard — `/` — was the bug: a website answering 200
-    // there was reported as an online gateway, so pointing the app at
-    // omniroute.online (the project's marketing site) looked like a successful
-    // connection right up until every screen 404'd.
-    for (const path of ['/api/health', '/healthz', '/livez']) {
-      try {
-        const res = await fetch(gatewayUrl(base, path), {
-          signal: controller.signal,
-          redirect: 'follow',
-          headers: { accept: 'application/json' },
-        });
-        const latencyMs = Date.now() - started;
-        const text = await res.text().catch(() => '');
-        answered = true;
+  // Ask for the API this app actually uses, never for `/`.
+  //
+  // Each candidate probe gets its own timeout budget rather than sharing a single
+  // countdown across sequential requests, so a slow or hanging endpoint does not
+  // exhaust the budget before fallback liveness routes are attempted.
+  for (const path of ['/api/health', '/healthz', '/livez']) {
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(gatewayUrl(base, path), {
+        signal: controller.signal,
+        redirect: 'follow',
+        headers: { accept: 'application/json' },
+      });
+      const latencyMs = Date.now() - started;
+      const text = await res.text().catch(() => '');
+      answered = true;
 
-        if (looksLikeHtml(text)) {
-          // A page here is proof of what the address is: not a gateway.
-          sawWebPage = true;
-          lastStatus = res.status;
-          continue;
-        }
-        if (res.ok) return { ok: true, status: res.status, latencyMs, kind: 'gateway' };
+      if (looksLikeHtml(text)) {
+        // A page here is proof of what the address is: not a gateway.
+        sawWebPage = true;
         lastStatus = res.status;
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') break;
+        continue;
       }
+      if (res.ok) return { ok: true, status: res.status, latencyMs, kind: 'gateway' };
+      lastStatus = res.status;
+    } catch (err) {
+      // Move to next probe route on network error or timeout
+    } finally {
+      clearTimeout(timer);
     }
-
-    if (sawWebPage) {
-      return { ok: false, status: lastStatus, kind: 'website', detail: websiteMessage(base) };
-    }
-    if (!answered) {
-      return { ok: false, kind: 'nothing', detail: `Network error — no answer from ${base}` };
-    }
-    return {
-      ok: false,
-      status: lastStatus,
-      kind: 'gateway',
-      detail: `Reached ${base} but no gateway route answered (last: HTTP ${lastStatus})`,
-    };
-  } finally {
-    clearTimeout(timer);
   }
+
+  if (sawWebPage) {
+    return { ok: false, status: lastStatus, kind: 'website', detail: websiteMessage(base) };
+  }
+  if (!answered) {
+    return { ok: false, kind: 'nothing', detail: `Network error — no answer from ${base}` };
+  }
+  return {
+    ok: false,
+    status: lastStatus,
+    kind: 'gateway',
+    detail: `Reached ${base} but no gateway route answered (last: HTTP ${lastStatus})`,
+  };
 }
 
 export function hostOf(serverUrl: string): string {

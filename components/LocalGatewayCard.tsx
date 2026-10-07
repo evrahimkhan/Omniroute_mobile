@@ -10,6 +10,7 @@ import {
   gatewayState,
   isLocalGatewaySupported,
   localGatewayUnavailableReason,
+  checkPayloadUpdate,
   STOPPED_REASON,
   startLocalGateway,
   stopLocalGateway,
@@ -17,6 +18,7 @@ import {
   waitForLocalGateway,
   type GatewayProgress,
   type GatewayState,
+  type PayloadUpdateCheck,
 } from '../lib/gatewayInstaller';
 import { theme } from '../lib/theme';
 
@@ -47,6 +49,10 @@ export default function LocalGatewayCard({ onUse }: Props) {
   const [keepAlive, setKeepAlive] = useState(true);
   const cancelled = useRef(false);
 
+  // Payload update check — runs once on mount and then every 30 minutes while
+  // an installed gateway is idle or running. A `null` means "not checked yet".
+  const [updateCheck, setUpdateCheck] = useState<PayloadUpdateCheck | null>(null);
+
   const supported = isLocalGatewaySupported();
   const unavailableReason = supported ? null : localGatewayUnavailableReason();
 
@@ -69,6 +75,21 @@ export default function LocalGatewayCard({ onUse }: Props) {
     }, 2000);
     return () => clearInterval(timer);
   }, [refresh, supported]);
+
+  // Check for payload updates once on mount, then every 30 minutes, but only
+  // when a gateway is already installed — there is nothing to compare against
+  // before the first install finishes writing its marker.
+  useEffect(() => {
+    if (!supported || !state?.installed) return;
+    let cancelled = false;
+    const run = () =>
+      checkPayloadUpdate()
+        .then((result) => { if (!cancelled) setUpdateCheck(result); })
+        .catch(() => {});
+    run();
+    const timer = setInterval(run, 30 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [supported, state?.installed]);
 
   const phase = state?.phase ?? 'idle';
   const progress: GatewayProgress | null = state?.logTail ? gatewayProgress(state.logTail) : null;
@@ -241,6 +262,56 @@ export default function LocalGatewayCard({ onUse }: Props) {
       {phase === 'ready' ? <Text style={styles.detail}>{LOCAL_GATEWAY_URL}</Text> : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      {updateCheck?.updateAvailable && !working ? (
+        <View style={styles.updateRow}>
+          <MaterialCommunityIcons name="update" size={16} color={theme.accent} />
+          <Text style={[styles.statusText, { color: theme.accent, flex: 1 }]}>
+            A newer gateway payload is available
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed]}
+            onPress={() => {
+              setUpdateCheck(null);
+              // Force re-download even though the URL hasn't changed — the
+              // checksum is what differs, and `force` tells the bootstrap to
+              // re-fetch rather than skipping the download.
+              void (async () => {
+                setError(null);
+                setBusy(true);
+                cancelled.current = false;
+                try {
+                  await startLocalGateway({ keepAlive, force: true });
+                  setWaiting(true);
+                  const url = await waitForLocalGateway({
+                    onProgress: (next) => setState(next),
+                    shouldContinue: () => !cancelled.current,
+                  });
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                  await refresh();
+                  onUse(url);
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : String(err);
+                  if (message === 'Cancelled') {
+                    await refresh();
+                  } else {
+                    setError(message);
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+                  }
+                } finally {
+                  setBusy(false);
+                  setWaiting(false);
+                }
+              })();
+            }}
+            disabled={busy}
+            accessibilityRole="button"
+          >
+            <MaterialCommunityIcons name="download" size={15} color={theme.text} />
+            <Text style={styles.btnLabel}>Update</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.row}>
         {phase === 'ready' ? (
@@ -462,6 +533,7 @@ const styles = StyleSheet.create({
   },
   pillText: { color: theme.textMuted, fontSize: 11, fontWeight: '700' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  updateRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 4 },
   statusText: { fontSize: 13, fontWeight: '700' },
   detail: { color: theme.textMuted, fontSize: 12 },
   error: { color: theme.danger, fontSize: 12, lineHeight: 17 },

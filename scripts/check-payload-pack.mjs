@@ -114,9 +114,11 @@ function diff(source, got, { label }) {
       }
       if (expected.sha !== actual.sha) problems.push(`${label}: ${key} content differs`);
       const wanted = expected.mode & 0o111 ? 0o755 : 0o644;
-      if (actual.mode !== wanted) {
+      const umask = typeof process.umask === 'function' ? process.umask() : 0o022;
+      const expectedMode = wanted & ~umask;
+      if (actual.mode !== expectedMode && actual.mode !== wanted) {
         problems.push(
-          `${label}: ${key} mode ${actual.mode.toString(8)}, expected ${wanted.toString(8)}`
+          `${label}: ${key} mode ${actual.mode.toString(8)}, expected ${expectedMode.toString(8)}`
         );
       }
     }

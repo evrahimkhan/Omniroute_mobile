@@ -37,9 +37,20 @@ export default function HomeScreen() {
   const { settings } = useSettings();
 
   const health = usePolling(api ? () => getHealth(api) : null, 10_000);
-  const telemetry = usePolling(api ? () => getTelemetry(api) : null, 10_000);
-  const providers = usePolling(api ? () => getProviders(api) : null, 30_000);
-  const logs = usePolling(api ? () => getCallLogs(api, { limit: 5 }) : null, 15_000);
+  const isHealthy = Boolean(health.data?.ok);
+
+  // When a gateway is offline or installing its ~44,000 payload files, polling
+  // four separate routes in parallel creates needless I/O and network contention.
+  // Only poll telemetry, providers and logs once health has answered successfully.
+  const telemetry = usePolling(api && isHealthy ? () => getTelemetry(api) : null, 10_000, [isHealthy], {
+    enabled: isHealthy,
+  });
+  const providers = usePolling(api && isHealthy ? () => getProviders(api) : null, 30_000, [isHealthy], {
+    enabled: isHealthy,
+  });
+  const logs = usePolling(api && isHealthy ? () => getCallLogs(api, { limit: 5 }) : null, 15_000, [isHealthy], {
+    enabled: isHealthy,
+  });
 
   const refreshing = health.loading || telemetry.loading;
   const reloadAll = useCallback(async () => {

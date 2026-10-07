@@ -149,6 +149,7 @@ function SurfaceView({ surface }: { surface: Surface }) {
   } else if (hasRows || isArrayPayload) {
     body = (
       <CollectionBody
+        path={typeof surface.path === 'string' ? surface.path : undefined}
         collection={collection}
         query={query}
         onQuery={setQuery}

@@ -47,7 +47,8 @@ import { statfsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { Readable, once } from 'node:stream';
+import { Readable } from 'node:stream';
+import { once } from 'node:events';
 import { createGunzip } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1116,8 +1117,8 @@ async function extractTarGz(tarballPath, destDir) {
         while (remaining > 0) {
           const take = Math.min(remaining, 1024 * 1024);
           const chunk = await reader.read(take);
-          const flushed = out.write(chunk);
-          if (!flushed) await once(out, 'drain');
+          out.write(chunk);
+          remaining -= take;
         }
       } catch (err) {
         out.destroy();

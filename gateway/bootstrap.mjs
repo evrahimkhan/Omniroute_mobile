@@ -1442,7 +1442,6 @@ async function main() {
   const markerMatches = Boolean(marker) && marker.sha256 && (!expectedSha || marker.sha256 === expectedSha);
   // A marker without sha256 is from a pre-hash install: treat it as stale so
   // the payload is re-fetched and the new marker (with sha256) is written.
-  const effectiveMarker = markerMatches ? marker : null;
   const upToDate = installed && markerMatches && !force;
 
   if (upToDate) {
@@ -1590,7 +1589,7 @@ async function main() {
   // Before the boot, because a wrong-arch library is a crash that happens *during*
   // the boot, and moving it out of the way is the only thing that prevents it.
   try {
-    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'), effectiveMarker?.installedAt ?? null);
+    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'), marker?.installedAt ?? null);
   } catch (err) {
     log(`warning: could not check the payload's native libraries: ${err.message}`);
   }
@@ -1606,7 +1605,7 @@ async function main() {
   // crash here has no stack, so the line written before each load is the
   // evidence — and an optional addon that died is disabled rather than kept.
   try {
-    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: effectiveMarker?.installedAt ?? null });
+    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: marker?.installedAt ?? null });
   } catch (err) {
     log(`warning: the native addon probe could not run: ${err.message}`);
   }

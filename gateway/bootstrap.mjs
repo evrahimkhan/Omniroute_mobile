@@ -1296,10 +1296,12 @@ async function download(url, destPath) {
     await pipeline(body, createWriteStream(destPath, start > 0 ? { flags: 'a' } : undefined));
   } catch (err) {
     if (stalled) throw new Error(stallMessage(received));
-    // Non-stall failure: remove the partial file so it does not
-    // mislead the next attempt or the user into thinking a resume exists.
-    try { await fs.unlink(destPath); } catch (unlinkErr) {
-      log(`warning: could not remove partial download: ${unlinkErr.message}`);
+    // A payload that failed *verification* is deleted — it is known bad,
+    // and resuming from it could never succeed. Other failures (transient
+    // network errors, 5xx, dropped connections) keep the partial file so
+    // the next attempt (or a manual retry) can resume from it.
+    if (err && err.badPayload) {
+      await fs.rm(destPath, { force: true }).catch(() => {});
     }
     throw new Error(`download failed: ${err.message}`);
   } finally {

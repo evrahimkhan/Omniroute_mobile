@@ -1593,6 +1593,13 @@ async function main() {
   } catch (err) {
     log(`warning: could not check the payload's native libraries: ${err.message}`);
   }
+
+  // Pass the same installedAt to probeNativeAddons so the clean-pass stamp is
+  // validated: a clean pass must be keyed on the install, and only when nothing
+  // moved. The check later in the runtime contract insists on a matching
+  // marker.installedAt, so this must be the same marker that a new install
+  // created.
+  const installedAtForChecks = marker?.installedAt ?? null;
   // Which of the payload's natively-backed dependencies it can actually find,
   // named before the boot that would otherwise fail around one of them.
   try {
@@ -1605,7 +1612,7 @@ async function main() {
   // crash here has no stack, so the line written before each load is the
   // evidence — and an optional addon that died is disabled rather than kept.
   try {
-    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: marker?.installedAt ?? null });
+    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: installedAtForChecks });
   } catch (err) {
     log(`warning: the native addon probe could not run: ${err.message}`);
   }

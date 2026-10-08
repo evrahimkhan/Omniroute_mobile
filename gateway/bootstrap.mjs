@@ -20,7 +20,7 @@
  *   GATEWAY_PAYLOAD_URL   tarball to install. Omitted = install step skipped.
  *   GATEWAY_PAYLOAD_SHA256  hex digest of that tarball; verified when present.
  *   GATEWAY_FORCE_INSTALL "1" to reinstall even if the marker matches.
- *   GATEWAY_PORT          default 20128.
+ *   GATEWAY_PORT          default 8080.
  *   GATEWAY_HOST          default 127.0.0.1 — loopback only, by design.
  *   GATEWAY_ENTRY         default dist/server.js, relative to the install dir.
  */
@@ -47,7 +47,7 @@ import { statfsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
+import { Readable, once } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1106,14 +1106,26 @@ async function extractTarGz(tarballPath, destDir) {
       dirs++;
     } else if (type === '0' || type === '\0') {
       await fs.mkdir(path.dirname(target), { recursive: true });
-      const chunks = [];
+      // Stream to disk rather than buffering the whole entry in memory: a
+      // single large file in a 700 MB payload would otherwise be fully
+      // materialised in RAM before being written, and the phone's heap cap
+      // is the thing that decides whether the process lives.
+      const out = createWriteStream(target, { mode });
       let remaining = size;
-      while (remaining > 0) {
-        const take = Math.min(remaining, 1024 * 1024);
-        chunks.push(await reader.read(take));
-        remaining -= take;
+      try {
+        while (remaining > 0) {
+          const take = Math.min(remaining, 1024 * 1024);
+          const chunk = await reader.read(take);
+          const flushed = out.write(chunk);
+          if (!flushed) await once(out, 'drain');
+        }
+      } catch (err) {
+        out.destroy();
+        throw err;
+      } finally {
+        out.end();
+        await once(out, 'finish');
       }
-      await fs.writeFile(target, Buffer.concat(chunks), { mode });
       files++;
       bytes += size;
       const step = Math.floor(bytes / PROGRESS_BYTES);
@@ -1283,6 +1295,11 @@ async function download(url, destPath) {
     await pipeline(body, createWriteStream(destPath, start > 0 ? { flags: 'a' } : undefined));
   } catch (err) {
     if (stalled) throw new Error(stallMessage(received));
+    // Non-stall failure: remove the partial file so it does not
+    // mislead the next attempt or the user into thinking a resume exists.
+    try { await fs.unlink(destPath); } catch (unlinkErr) {
+      log(`warning: could not remove partial download: ${unlinkErr.message}`);
+    }
     throw new Error(`download failed: ${err.message}`);
   } finally {
     clearTimeout(timer);
@@ -1419,7 +1436,10 @@ async function main() {
   const marker = await readMarker(gatewayDir);
   installedAppDir = appDir;
   const installed = entries.some((candidate) => existsSync(path.join(appDir, candidate)));
-  const markerMatches = Boolean(marker) && (!expectedSha || marker.sha256 === expectedSha);
+  const markerMatches = Boolean(marker) && marker.sha256 && (!expectedSha || marker.sha256 === expectedSha);
+  // A marker without sha256 is from a pre-hash install: treat it as stale so
+  // the payload is re-fetched and the new marker (with sha256) is written.
+  const effectiveMarker = markerMatches ? marker : null;
   const upToDate = installed && markerMatches && !force;
 
   if (upToDate) {
@@ -1567,7 +1587,7 @@ async function main() {
   // Before the boot, because a wrong-arch library is a crash that happens *during*
   // the boot, and moving it out of the way is the only thing that prevents it.
   try {
-    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'), marker?.installedAt ?? null);
+    await quarantineForeignLibraries(appDir, path.join(gatewayDir, 'wrong-arch'), effectiveMarker?.installedAt ?? null);
   } catch (err) {
     log(`warning: could not check the payload's native libraries: ${err.message}`);
   }
@@ -1583,7 +1603,7 @@ async function main() {
   // crash here has no stack, so the line written before each load is the
   // evidence — and an optional addon that died is disabled rather than kept.
   try {
-    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: marker?.installedAt ?? null });
+    await probeNativeAddons({ appDir, gatewayDir, previousBoot, installedAt: effectiveMarker?.installedAt ?? null });
   } catch (err) {
     log(`warning: the native addon probe could not run: ${err.message}`);
   }

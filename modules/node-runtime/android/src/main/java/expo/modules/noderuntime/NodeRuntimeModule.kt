@@ -127,7 +127,8 @@ class NodeRuntimeModule : Module() {
     } catch (t: Throwable) {
       throw NodeRuntimeStartException("Unusable path: $path")
     }
-    val allowed = listOf(context.filesDir, context.cacheDir).any { root ->
+    val allowedRoots = listOf(context.filesDir, context.cacheDir)
+    val allowed = allowedRoots.any { root ->
       val rootPath = root.canonicalFile.path
       canonical.path == rootPath || canonical.path.startsWith(rootPath + File.separator)
     }

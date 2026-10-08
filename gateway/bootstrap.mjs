@@ -1125,7 +1125,9 @@ async function extractTarGz(tarballPath, destDir) {
         throw err;
       } finally {
         out.end();
-        await once(out, 'finish');
+        // A destroyed stream never emits 'finish', so awaiting it would hang
+        // the install on the very error path it is trying to report.
+        if (!out.destroyed) await once(out, 'finish');
       }
       files++;
       bytes += size;

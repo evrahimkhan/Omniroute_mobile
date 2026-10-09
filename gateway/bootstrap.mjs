@@ -1438,7 +1438,7 @@ async function main() {
 
   await fs.mkdir(gatewayDir, { recursive: true });
 
-  const marker = await readMarker(gatewayDir);
+  let marker = await readMarker(gatewayDir);
   installedAppDir = appDir;
   const installed = entries.some((candidate) => existsSync(path.join(appDir, candidate)));
   const markerMatches = Boolean(marker) && marker.sha256 && (!expectedSha || marker.sha256 === expectedSha);
@@ -1564,6 +1564,7 @@ async function main() {
         path.join(gatewayDir, MARKER),
         JSON.stringify({ url, sha256: expectedSha || null, installedAt: new Date().toISOString() }, null, 2)
       );
+      marker = await readMarker(gatewayDir);
       // The tarball has served its purpose; keeping it doubles the footprint.
       await fs.rm(tarballPath, { force: true });
       bootTrace('the payload is installed');

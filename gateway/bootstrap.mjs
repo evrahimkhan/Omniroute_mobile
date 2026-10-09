@@ -891,6 +891,16 @@ async function quarantineForeignLibraries(appDir, quarantineDir, installedAt) {
   }
 
   if (!binaries.length) {
+    if (installedAt && stampPath) {
+      try {
+        writeFileSync(
+          stampPath,
+          JSON.stringify({ installedAt, checkedAt: new Date().toISOString(), removed: 0, libraries: 0 })
+        );
+      } catch {
+        // The stamp is an optimisation; failing to write it costs a rescan.
+      }
+    }
     log('native libraries in the payload: none');
     return;
   }

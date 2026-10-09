@@ -73,7 +73,9 @@ http
 }
 
 const failures = [];
+let checks = 0;
 const check = (label, ok) => {
+  checks += 1;
   if (ok) process.stdout.write(`  ✓ ${label}\n`);
   else {
     failures.push(label);
@@ -322,6 +324,16 @@ __attribute__((constructor)) static void crash_on_load(void) {
   const crashManifest = packFixture(crashing, crashTar, 'server.js');
   const strikeTar = join(work, 'striking.tar.gz');
   const strikeManifest = packFixture(striking, strikeTar, 'server.js');
+  // A payload with no foreign libraries: case 6 uses it to prove a clean
+  // install writes a clean-pass stamp and the next boot honors it.
+  const clean = join(work, 'clean');
+  mkdirSync(join(clean, 'node_modules', 'next'), { recursive: true });
+  mkdirSync(join(clean, 'deep', 'a'.repeat(60), 'b'.repeat(60)), { recursive: true });
+  writeFileSync(join(clean, 'deep', 'a'.repeat(60), 'b'.repeat(60), 'long-name.txt'), 'deep\n');
+  writeFileSync(join(clean, 'node_modules', 'next', 'package.json'), '{}');
+  writeFileSync(join(clean, 'server.js'), fixtureServer('STANDALONE'));
+  const cleanTar = join(work, 'clean.tar.gz');
+  const cleanManifest = packFixture(clean, cleanTar, 'server.js');
 
   // --- serve the archives, manifest included -------------------------------
   const served = new Map([
@@ -335,6 +347,8 @@ __attribute__((constructor)) static void crash_on_load(void) {
     ['/striking.tar.gz.json', readFileSync(strikeManifest)],
     ['/crashing.tar.gz', readFileSync(crashTar)],
     ['/crashing.tar.gz.json', readFileSync(crashManifest)],
+    ['/clean.tar.gz', readFileSync(cleanTar)],
+    ['/clean.tar.gz.json', readFileSync(cleanManifest)],
   ]);
   // Two payloads served badly on purpose, to exercise the resume path. A phone
   // that leaves Wi-Fi range does not get a clean error: the connection either
@@ -553,6 +567,43 @@ __attribute__((constructor)) static void crash_on_load(void) {
     fifth.output.includes('gateway already installed at')
   );
   check('symlinked path, no flag: and it boots', fifth.output.includes('STANDALONE listening') && fifth.servedOk === 'ok');
+
+  // --- case 6: a clean install writes a clean-pass stamp, and the next boot
+  //     honors it instead of rescanning the whole payload --------------------
+  //
+  // Case 1's payload has foreign libraries, so its first boot moves them and
+  // never writes a stamp — which is how the previous test suite masked a real
+  // gap: no test ever checked that a payload with *no* foreign libraries gets a
+  // stamp on the first boot, or that a second boot skips the scan because of
+  // it. Without that, a fresh install of a clean payload rescaned tens of
+  // thousands of files on slow phone storage for no reason, and worse: a
+  // reinstall could hand the scan a stale timestamp from the previous marker
+  // and skip it entirely, leaving foreign libraries in place to SIGSEGV the
+  // boot.
+  const cleanDir = join(work, 'install-clean');
+  const cleanFirst = await run('clean', cleanDir, {
+    GATEWAY_PAYLOAD_URL: `${origin}/clean.tar.gz`,
+    GATEWAY_PAYLOAD_SHA256_URL: `${origin}/clean.tar.gz.json`,
+  });
+  check(
+    'a clean install scans the payload and reports how many libraries it checked',
+    cleanFirst.output.includes('native libraries in the payload: none')
+  );
+  check(
+    'a clean install writes a clean-pass stamp keyed on this install',
+    existsSync(join(cleanDir, 'native-check.json'))
+  );
+  check('a clean install boots', cleanFirst.output.includes('STANDALONE listening') && cleanFirst.servedOk === 'ok');
+  const cleanSecond = await run('clean re-run', cleanDir, {});
+  check(
+    'a second boot over a clean install does not rescan the whole payload',
+    cleanSecond.output.includes('already checked for this install')
+  );
+  check(
+    'and the stamp it skips on is the one this install wrote, not a stale one',
+    cleanSecond.output.includes('already checked for this install') &&
+      !cleanSecond.output.includes('moved ')
+  );
 
   // --- case 3: reinstall/restart with no URL and no checksum --------------
   const third = await run('re-run', install1, {});
@@ -841,7 +892,7 @@ __attribute__((constructor)) static void crash_on_load(void) {
   await new Promise((resolve) => httpServer.close(resolve));
   rmSync(work, { recursive: true, force: true });
 
-  const total = 70;
+  const total = checks;
   if (failures.length) {
     process.stderr.write(`\n✖ payload-install: ${failures.length} of ${total} checks failed\n`);
     process.exit(1);

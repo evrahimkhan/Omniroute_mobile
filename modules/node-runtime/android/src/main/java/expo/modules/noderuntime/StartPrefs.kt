@@ -52,7 +52,7 @@ internal object StartPrefs {
         workingDirectory = json.getString("workingDirectory"),
         env = env,
         logFilePath = json.getString("logFilePath"),
-        stackSizeMb = json.optInt("stackSizeMb", 8),
+        stackSizeMb = json.optInt("stackSizeMb", NodeRuntimeHost.DEFAULT_STACK_MB),
         keepAlive = true
       )
     }.getOrNull()

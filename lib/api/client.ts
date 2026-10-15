@@ -126,7 +126,7 @@ export function hostOf(url: string): string {
 
 /** The one sentence worth showing when the address is a website, not a gateway. */
 export function websiteMessage(url: string): string {
-  return `${hostOf(url)} answered with a web page, not the gateway API. That address is a website: a gateway serves /api/… on your own machine (http://127.0.0.1:20128) or on this phone.`;
+  return `${hostOf(url)} answered with a web page, not the gateway API. That address is a website: a gateway serves /api/… on your own machine (http://127.0.0.1:8080) or on this phone.`;
 }
 
 function cookieFrom(headers: Headers): string | null {

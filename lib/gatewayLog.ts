@@ -132,7 +132,7 @@ function explainFailure(detail: string): string {
  *
  * The runtime's state decides, and the log only refines it. Deriving the phase
  * from the log alone is how a card gets stuck: after the process died, the last
- * line was `starting server.js on 127.0.0.1:20128`, so a fresh app session — no
+ * line was `starting server.js on 127.0.0.1:8080`, so a fresh app session — no
  * runtime, nothing running — showed a spinner and "Starting the gateway…"
  * forever, with no way to start anything. A line in a file is a record of what
  * happened once, not evidence of what is happening now.

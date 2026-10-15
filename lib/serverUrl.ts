@@ -2,7 +2,7 @@
  * The gateway URL, and which scheme a bare host should get.
  *
  * The app talks to either a public domain (https) or something on this device
- * or this Wi-Fi (plain http). Typing `127.0.0.1:20128` — or `192.168.1.10:20128`
+ * or this Wi-Fi (plain http). Typing `127.0.0.1:8080` — or `192.168.1.10:8080`
  * — is the natural thing to do, and quietly making it `https://` is not a small
  * mistake: the request dies in the TLS handshake, `fetch` reports only
  * "Network error", Android's WebView reports only ERR_SSL_PROTOCOL_ERROR, and
@@ -99,7 +99,7 @@ export function normalizeServerUrl(raw: string): string {
  * Repair a *saved* URL that can only be wrong: https to loopback.
  *
  * This is not hypothetical — until the scheme rule above existed, typing
- * `127.0.0.1:20128` was stored as `https://127.0.0.1:20128`, and every launch
+ * `127.0.0.1:8080` was stored as `https://127.0.0.1:8080`, and every launch
  * after that failed the TLS handshake before anything could correct it. A
  * loopback address has no certificate and no way to be trusted with one, so
  * https there is always a mistake; an https gateway on `192.168.x.y` is unusual

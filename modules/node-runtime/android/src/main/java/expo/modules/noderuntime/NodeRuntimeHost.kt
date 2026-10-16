@@ -136,7 +136,7 @@ internal object NodeRuntimeHost {
    * before the payload ever booted; 32 MB costs only address space, which a
    * 64-bit process has in abundance.
    */
-  private const val DEFAULT_STACK_MB = 32
+  internal const val DEFAULT_STACK_MB = 32
   private const val MIN_STACK_MB = 2
   private const val MAX_STACK_MB = 64
   private const val MAX_LOG_BYTES = 8 * 1024 * 1024

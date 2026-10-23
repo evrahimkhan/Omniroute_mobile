@@ -14,7 +14,15 @@ import { ApiError, createApi, type Api } from './client';
 import { getAuthStatus, signIn as signInRequest, signOut as signOutRequest } from './auth';
 import { useSettings } from '../useSettings';
 
-const SESSION_KEY = 'omniroute.session.v1';
+// session key includes serverUrl so each gateway has its own session
+function sessionKey(serverUrl: string): string {
+  try {
+    const host = new URL(serverUrl).host;
+    return `omniroute.session.v2:${host}`;
+  } catch {
+    return `omniroute.session.v2:${serverUrl}`;
+  }
+}
 
 export interface SessionState {
   /** The dashboard session cookie, when the app has one. */
@@ -52,8 +60,10 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     mounted.current = true;
     (async () => {
+      if (!settings.serverUrl) return;
       try {
-        const stored = await AsyncStorage.getItem(SESSION_KEY);
+        const key = sessionKey(settings.serverUrl);
+        const stored = await AsyncStorage.getItem(key);
         if (mounted.current && stored) setCookie(stored);
       } catch {
         // No stored session: the gateway may not need one.
@@ -62,15 +72,17 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted.current = false;
     };
-  }, []);
+  }, [settings.serverUrl]);
 
   const persist = useCallback((next: string | null) => {
     setCookie(next);
-    const write = next ? AsyncStorage.setItem(SESSION_KEY, next) : AsyncStorage.removeItem(SESSION_KEY);
+    if (!settings.serverUrl) return;
+    const key = sessionKey(settings.serverUrl);
+    const write = next ? AsyncStorage.setItem(key, next) : AsyncStorage.removeItem(key);
     write.catch(() => {
       // A session that cannot be persisted is still usable for this run.
     });
-  }, []);
+  }, [settings.serverUrl]);
 
   const api = useMemo(() => {
     if (!loaded || !settings.serverUrl) return null;

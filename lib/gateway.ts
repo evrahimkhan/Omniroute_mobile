@@ -37,14 +37,21 @@ export interface GatewayStatus {
 /**
  * Probe the gateway. `/healthz` is a lightweight liveness route shipped by
  * OmniRoute; we fall back to the dashboard itself if it 404s on older builds.
+ *
+ * @param serverUrl - The gateway URL to probe
+ * @param sessionCookie - Optional session cookie for authenticated gateways
+ * @param timeoutMs - Request timeout in milliseconds
  */
-export async function checkGateway(serverUrl: string, timeoutMs = 10000): Promise<GatewayStatus> {
+export async function checkGateway(serverUrl: string, sessionCookie?: string | null, timeoutMs = 10000): Promise<GatewayStatus> {
   const base = normalizeServerUrl(serverUrl);
   if (!base) return { ok: false, detail: 'No gateway URL configured', kind: 'nothing' };
 
   let sawWebPage = false;
   let lastStatus: number | undefined;
   let answered = false;
+
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (sessionCookie) headers['Cookie'] = sessionCookie;
 
   // Ask for the API this app actually uses, never for `/`.
   //
@@ -59,7 +66,7 @@ export async function checkGateway(serverUrl: string, timeoutMs = 10000): Promis
       const res = await fetch(gatewayUrl(base, path), {
         signal: controller.signal,
         redirect: 'follow',
-        headers: { accept: 'application/json' },
+        headers,
       });
       const latencyMs = Date.now() - started;
       const text = await res.text().catch(() => '');

@@ -46,7 +46,7 @@ export default function SettingsScreen() {
     if (!target) return;
     setTesting(true);
     setTestResult(null);
-    const res = await checkGateway(target);
+    const res = await checkGateway(target, session.cookie);
     setTesting(false);
     setTestResult(
       res.ok ? `Online — HTTP ${res.status} in ${res.latencyMs ?? '?'} ms` : `Unreachable — ${res.detail ?? ''}`

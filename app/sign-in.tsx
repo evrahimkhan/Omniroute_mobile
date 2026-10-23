@@ -57,10 +57,10 @@ export default function SignInScreen() {
     // Both questions, in parallel: "is anything serving the API there" and "does
     // it recognise this client's session". Either can be answered without the
     // other, and the screen needs both to say anything true.
-    const [status] = await Promise.all([checkGateway(serverUrl), refreshRef.current()]);
+    const [status] = await Promise.all([checkGateway(serverUrl, session.cookie), refreshRef.current()]);
     setProbe(status);
     setProbing(false);
-  }, [serverUrl]);
+  }, [serverUrl, session.cookie]);
 
   useEffect(() => {
     void ask();

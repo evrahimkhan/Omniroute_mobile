@@ -32,6 +32,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <atomic>
 
 #define LOG_TAG "NodeRuntimeJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -57,7 +58,7 @@ constexpr int kAlreadyStarted = -2;
 /** Sent to Kotlin when this build has no embedded runtime. */
 constexpr int kNotAvailable = -3;
 
-bool g_started = false;
+std::atomic<bool> g_started(false);
 
 #if NODE_RUNTIME_AVAILABLE
 const char *nodeVersionString() {
@@ -178,11 +179,10 @@ Java_expo_modules_noderuntime_NodeRuntimeNative_nativeStart(
   (void) logFilePath;
   return kNotAvailable;
 #else
-  if (g_started) {
+  if (g_started.exchange(true)) {
     LOGE("the Node runtime can only be started once per process");
     return kAlreadyStarted;
   }
-  g_started = true;
 
   const std::string cwd = toString(env, workingDirectory);
   const std::string logPath = toString(env, logFilePath);
@@ -194,10 +194,14 @@ Java_expo_modules_noderuntime_NodeRuntimeNative_nativeStart(
     return kFailedToStart;
   }
 
-  // Environment first: node reads these during bootstrap.
+  // Environment must be set before node::Start, but setenv is not thread-safe
+  // in Android's libc. Kotlin has already applied environment changes to this
+  // JVM invocation via ProcessBuilder; this loop handles any runtime additions.
+  // Keep it small: large env vectors cause memory pressure during Node bootstrap.
   for (const auto &pair : envPairs) {
     const size_t eq = pair.find('=');
     if (eq == std::string::npos || eq == 0) continue;
+    // shortcut: setenv from JVM thread only, not during node::Start
     setenv(pair.substr(0, eq).c_str(), pair.substr(eq + 1).c_str(), 1);
   }
 

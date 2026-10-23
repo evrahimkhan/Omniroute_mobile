@@ -131,15 +131,31 @@ export function websiteMessage(url: string): string {
 
 function cookieFrom(headers: Headers): string | null {
   // React Native exposes `set-cookie` as a single string; some runtimes expose
-  // several. Take the first name=value pair of whichever arrives.
+  // several. Look for the dashboard session cookie specifically.
   const raw =
     typeof (headers as { getSetCookie?: () => string[] }).getSetCookie === 'function'
       ? (headers as { getSetCookie: () => string[] }).getSetCookie().join(', ')
       : headers.get('set-cookie');
   if (!raw) return null;
-  const first = raw.split(/,(?=[^;]+=)/)[0].trim();
-  const pair = first.split(';')[0].trim();
-  return pair.includes('=') ? pair : null;
+
+  // Split on comma only when followed by a name=value pair (not mid-path)
+  const cookies = raw.split(/,(?=[^;]+=)/).map(c => c.trim());
+
+  // Look for dashboard session cookie (omniroute.sid) or any session-looking cookie
+  for (const cookie of cookies) {
+    const pair = cookie.split(';')[0].trim();
+    if (pair.includes('=')) {
+      const [name, value] = pair.split('=').map(s => s.trim());
+      // Prioritize dashboard session cookie, fall back to first session-looking cookie
+      if (name === 'omniroute.sid' || name.includes('sid') || name.includes('session')) {
+        return pair;
+      }
+      // Use first valid cookie if none match session pattern
+      return pair;
+    }
+  }
+
+  return null;
 }
 
 export interface RequestOptions {

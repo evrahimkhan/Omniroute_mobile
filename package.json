@@ -24,7 +24,8 @@
     "surfaces:coverage": "node scripts/check-surface-coverage.mjs",
     "payload:pack": "node scripts/pack-payload.mjs",
     "payload:test": "node scripts/check-payload-pack.mjs",
-    "payload:install-test": "node scripts/check-payload-install.mjs"
+    "payload:install-test": "node scripts/check-payload-install.mjs",
+    "lint": "expo lint"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
@@ -47,6 +48,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~57.0.2",
     "js-yaml": "^4.3.2",
     "typescript": "~6.0.3"
   }

@@ -53,7 +53,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "./plugins/with-v2-signing.js"
     ]
   }
 }

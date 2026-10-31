@@ -109,9 +109,14 @@ function snippet(text: string, max = 200): string {
  * the app can say that instead of printing the markup.
  */
 export function looksLikeHtml(text: string): boolean {
-  const head = text.slice(0, 300).trimStart().toLowerCase();
+  const head = text.slice(0, 500).trimStart().toLowerCase();
   return (
-    head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<!--') || head.startsWith('<head')
+    head.includes('<!doctype') ||
+    head.includes('<html') ||
+    head.includes('<head') ||
+    head.includes('<body>') ||
+    head.includes('<title>') ||
+    head.startsWith('<!--')
   );
 }
 
@@ -141,21 +146,33 @@ function cookieFrom(headers: Headers): string | null {
   // Split on comma only when followed by a name=value pair (not mid-path)
   const cookies = raw.split(/,(?=[^;]+=)/).map(c => c.trim());
 
-  // Look for dashboard session cookie (omniroute.sid) or any session-looking cookie
+  // Prioritize exact session cookies first
+  let fallback: string | null = null;
   for (const cookie of cookies) {
     const pair = cookie.split(';')[0].trim();
     if (pair.includes('=')) {
-      const [name, value] = pair.split('=').map(s => s.trim());
-      // Prioritize dashboard session cookie, fall back to first session-looking cookie
-      if (name === 'omniroute.sid' || name.includes('sid') || name.includes('session')) {
+      const [name] = pair.split('=').map(s => s.trim());
+      if (name === 'omniroute.sid' || name === 'auth_token' || name === 'sid' || name === 'session') {
         return pair;
       }
-      // Use first valid cookie if none match session pattern
-      return pair;
     }
   }
 
-  return null;
+  // Then fallback to token / auth matching (excluding csrf tokens)
+  for (const cookie of cookies) {
+    const pair = cookie.split(';')[0].trim();
+    if (pair.includes('=')) {
+      const [name] = pair.split('=').map(s => s.trim());
+      if ((name.includes('token') || name.includes('auth')) && !name.includes('csrf')) {
+        return pair;
+      }
+      if (!fallback) {
+        fallback = pair;
+      }
+    }
+  }
+
+  return fallback;
 }
 
 export interface RequestOptions {

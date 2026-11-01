@@ -60,13 +60,17 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     mounted.current = true;
     (async () => {
-      if (!settings.serverUrl) return;
+      if (!settings.serverUrl) {
+        if (mounted.current) setCookie(null);
+        return;
+      }
       try {
         const key = sessionKey(settings.serverUrl);
         const stored = await AsyncStorage.getItem(key);
-        if (mounted.current && stored) setCookie(stored);
+        if (mounted.current) setCookie(stored ?? null);
       } catch {
         // No stored session: the gateway may not need one.
+        if (mounted.current) setCookie(null);
       }
     })();
     return () => {

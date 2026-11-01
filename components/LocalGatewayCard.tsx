@@ -66,14 +66,26 @@ export default function LocalGatewayCard({ onUse }: Props) {
   }, [supported]);
 
   useEffect(() => {
-    refresh();
+    let active = true;
+    void (async () => {
+      if (!supported) return;
+      try {
+        const next = await gatewayState();
+        if (active) setState(next);
+      } catch {
+        // State is best-effort
+      }
+    })();
     // While the runtime is up but not yet serving, keep looking — the install
     // can take a while and the log is how it reports in.
     const timer = setInterval(() => {
       if (!supported) return;
       refresh();
     }, 2000);
-    return () => clearInterval(timer);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [refresh, supported]);
 
   // Check for payload updates once on mount, then every 30 minutes, but only
@@ -336,17 +348,28 @@ export default function LocalGatewayCard({ onUse }: Props) {
             </Pressable>
           </>
         ) : working ? (
-          <Pressable
-            style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed]}
-            onPress={() => {
-              cancelled.current = true;
-              setWaiting(false);
-            }}
-            accessibilityRole="button"
-          >
-            <MaterialCommunityIcons name="close" size={17} color={theme.text} />
-            <Text style={styles.btnLabel}>Stop waiting</Text>
-          </Pressable>
+          <>
+            <Pressable
+              style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed]}
+              onPress={() => {
+                cancelled.current = true;
+                setWaiting(false);
+              }}
+              accessibilityRole="button"
+            >
+              <MaterialCommunityIcons name="close" size={17} color={theme.text} />
+              <Text style={styles.btnLabel}>Stop waiting</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.btn, styles.btnSecondary, pressed && styles.pressed]}
+              onPress={stop}
+              disabled={busy}
+              accessibilityRole="button"
+            >
+              <MaterialCommunityIcons name="stop-circle-outline" size={17} color={theme.text} />
+              <Text style={styles.btnLabel}>Stop hosting</Text>
+            </Pressable>
+          </>
         ) : (
           <Pressable
             style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}

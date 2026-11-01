@@ -1,0 +1,7 @@
+# ninja log v5
+0	1356	1793430854826352880	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	a77f3d721de49422
+1357	1393	1793430854867499569	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/RelWithDebInfo/6ux1a4b5/obj/x86_64/libnoderuntime_jni.so	6bb69e5354577c2f
+0	8	0	clean	d67a77e3196144d
+0	3	0	clean	d67a77e3196144d
+0	11	0	clean	d67a77e3196144d
+0	5	0	clean	d67a77e3196144d

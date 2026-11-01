@@ -1,0 +1,46 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:1:1-32:12
+INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:1:1-32:12
+	package
+		INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:1:11-69
+uses-permission#android.permission.FOREGROUND_SERVICE
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:10:3-75
+	android:name
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:10:20-72
+uses-permission#android.permission.FOREGROUND_SERVICE_SPECIAL_USE
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:11:3-87
+	android:name
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:11:20-84
+uses-permission#android.permission.POST_NOTIFICATIONS
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:13:3-75
+	android:name
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:13:20-72
+application
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:15:3-30:17
+	android:largeHeap
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:15:16-40
+service#expo.modules.noderuntime.GatewayService
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:22:5-29:15
+	android:exported
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:24:7-31
+	android:foregroundServiceType
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:25:7-49
+	android:name
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:23:7-37
+property#android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE
+ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:26:7-28:48
+	android:value
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:28:9-45
+	android:name
+		ADDED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml:27:9-68
+uses-sdk
+INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml
+INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /home/maskeddevil/omni/modules/node-runtime/android/src/main/AndroidManifest.xml

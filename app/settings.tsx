@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -35,9 +35,11 @@ export default function SettingsScreen() {
 
   // The stored value arrives asynchronously; without this the field can show the
   // default gateway and Save would then silently switch the app to it.
-  useEffect(() => {
-    if (loaded) setUrl(settings.serverUrl);
-  }, [loaded, settings.serverUrl]);
+  const [prevServerUrl, setPrevServerUrl] = useState(settings.serverUrl);
+  if (loaded && settings.serverUrl !== prevServerUrl) {
+    setPrevServerUrl(settings.serverUrl);
+    setUrl(settings.serverUrl);
+  }
 
   const appVersion = (Constants.expoConfig?.version as string | undefined) ?? '1.0.0';
 

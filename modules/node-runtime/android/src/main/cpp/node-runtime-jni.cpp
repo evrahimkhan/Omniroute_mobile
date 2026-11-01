@@ -218,15 +218,34 @@ Java_expo_modules_noderuntime_NodeRuntimeNative_nativeStart(
   LOGI("starting node %s with %zu argument(s)", nodeVersionString(), argStrings.size());
 
   // node::Start wants mutable C strings and a NULL-terminated argv.
+  // In libuv on Linux, uv_setup_args computes process title buffer bounds as:
+  // process_title.len = (argv[argc - 1] + strlen(argv[argc - 1])) - argv[0]
+  // Separate strdup() heap allocations make (last - first) arbitrary pointer
+  // arithmetic, causing heap corruption or SIGSEGV inside uv_set_process_title.
+  // Allocate a single contiguous buffer for all arguments with padding.
+  size_t totalBytes = 0;
+  for (const auto &arg : argStrings) {
+    totalBytes += arg.size() + 1;
+  }
+  constexpr size_t kTitlePadding = 512;
+  totalBytes += kTitlePadding;
+
+  char *contiguousArgs = static_cast<char *>(calloc(1, totalBytes));
   std::vector<char *> argv;
   argv.reserve(argStrings.size() + 1);
-  for (const auto &arg : argStrings) argv.push_back(strdup(arg.c_str()));
+
+  char *cursor = contiguousArgs;
+  for (size_t i = 0; i < argStrings.size(); ++i) {
+    argv.push_back(cursor);
+    memcpy(cursor, argStrings[i].c_str(), argStrings[i].size());
+    cursor += argStrings[i].size() + 1;
+  }
   argv.push_back(nullptr);
 
   const int exitCode = node::Start(static_cast<int>(argStrings.size()), argv.data());
 
   restoreStdio();
-  for (char *arg : argv) free(arg);
+  free(contiguousArgs);
   LOGI("node exited with code %d", exitCode);
   return exitCode;
 #endif

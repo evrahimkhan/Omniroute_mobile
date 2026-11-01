@@ -13,8 +13,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { Linking, StyleSheet, Text, View } from 'react-native';
-import { FlatList } from 'react-native';
+import { FlatList, Linking, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 

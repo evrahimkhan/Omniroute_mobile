@@ -1,0 +1,26 @@
+# ninja log v5
+0	3054	1793211043115577744	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+3056	3099	1793211043167578064	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+7	2687	1793216505943741968	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+2688	2847	1793216506111743050	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	5	0	clean	d67a77e3196144d
+11	19489	1793421556091489301	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+19489	19704	1793421556307492127	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	7	0	clean	d67a77e3196144d
+8	10191	1793425049811941349	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+10199	10680	1793425050351945367	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	14	0	clean	d67a77e3196144d
+11	6913	1793428705426731854	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+6916	7200	1793428705718734014	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	9	0	clean	d67a77e3196144d
+9	5104	1793463061093637131	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+5104	5206	1793463061213645368	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	146	0	clean	d67a77e3196144d
+32	5450	1793463643370800538	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+5453	5670	1793463643614792302	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	9	0	clean	d67a77e3196144d
+16	26464	1793466754068262660	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+26469	27579	1793466755220232424	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a
+0	4	0	clean	d67a77e3196144d
+8	9059	1793467811308507787	CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o	813bf9b662b04944
+9068	9324	1793467811596511773	/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/armeabi-v7a/libnoderuntime_jni.so	2c558dd40c8bd90a

@@ -11,7 +11,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
-import { Badge, Button, EmptyState, Field, ListRow, KeyValue, uiStyles } from '../ui/kit';
+import { Badge, Button, EmptyState, Field, ListRow, KeyValue } from '../ui/kit';
 import { Sheet } from '../ui/Sheet';
 import { useToast } from '../ui/Toast';
 import { useApi } from '../../lib/api/context';

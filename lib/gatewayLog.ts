@@ -22,6 +22,7 @@ export type GatewayProgressKind =
   | 'extracting'
   | 'installed'
   | 'starting'
+  | 'ready'
   | 'failed';
 
 /** Progress worth showing, extracted from the runtime's log. */
@@ -104,6 +105,8 @@ export function gatewayProgress(log: string): GatewayProgress | null {
     }
     found = match(/^starting ([\s\S]+)$/);
     if (found) return { kind: 'starting', label: 'Starting the gateway…', detail: found[1] };
+    found = match(/^the server is answering on ([\s\S]+)$/);
+    if (found) return { kind: 'ready', label: 'Running', detail: found[1] };
   }
   return null;
 }
@@ -153,6 +156,7 @@ export function deriveGatewayPhase(input: {
   if (fromLog.phase === 'failed') return 'failed';
   if (input.exited) return 'failed';
   if (input.running) {
+    if (fromLog.phase === 'ready') return 'ready';
     return fromLog.phase === 'installing' ? 'installing' : 'starting';
   }
   // Nothing is running and the runtime has not exited in this process: whatever
@@ -344,6 +348,9 @@ export function describeGatewayLog(log: string): { phase: GatewayPhaseName | nul
   if (!progress) return { phase: null };
   if (progress.kind === 'failed') {
     return { phase: 'failed', error: explainFailure(progress.detail ?? '') };
+  }
+  if (progress.kind === 'ready') {
+    return { phase: 'ready' };
   }
   if (progress.kind === 'installed' || progress.kind === 'starting') {
     return { phase: 'starting' };

@@ -121,6 +121,23 @@ export async function getProviders(api: Api, query: { limit?: number; offset?: n
   return normalizeProviders(await api.get<unknown>('/api/providers', { query }));
 }
 
+export interface CreateProviderInput {
+  provider: string;
+  name: string;
+  apiKey?: string;
+  priority?: number;
+  providerSpecificData?: Record<string, unknown>;
+}
+
+export async function createProvider(api: Api, input: CreateProviderInput) {
+  const result = asRecord(await api.post<unknown>('/api/providers', input));
+  return result;
+}
+
+export async function deleteProvider(api: Api, id: string) {
+  await api.del<unknown>(`/api/providers/${encodeURIComponent(id)}`);
+}
+
 /** Turn one or more connections on or off. */
 export async function setProvidersActive(api: Api, ids: string[], isActive: boolean) {
   const result = asRecord(await api.patch<unknown>('/api/providers', { ids, isActive }));

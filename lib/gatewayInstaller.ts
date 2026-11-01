@@ -419,12 +419,18 @@ export async function gatewayState(): Promise<GatewayState> {
     };
   }
 
-  const phase = deriveGatewayPhase({
+  let phase = deriveGatewayPhase({
     running: status.running,
     exited: Boolean(status.exited),
     hasMarker: Boolean(marker),
     log,
   }) as GatewayPhase;
+
+  if (status.running && phase !== 'ready' && phase !== 'installing') {
+    if (bootStep === 'the server is answering' || (bootRecord && bootRecord.includes('the server is answering'))) {
+      phase = 'ready';
+    }
+  }
 
   return {
     phase,

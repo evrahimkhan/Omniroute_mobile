@@ -1409,6 +1409,23 @@ async function readMarker(dir) {
 }
 
 async function main() {
+  // Protect against native uv_set_process_title crashes in embedded Android processes
+  try {
+    let customTitle = process.title || 'node';
+    Object.defineProperty(process, 'title', {
+      get() {
+        return customTitle;
+      },
+      set(newTitle) {
+        customTitle = newTitle;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  } catch {
+    // Process title override is best-effort defense in depth
+  }
+
   // Printed before anything else can fail, so an empty log means the script
   // never got this far — a different problem from a gateway that failed to
   // install, and one the app can only guess at otherwise.

@@ -1,0 +1,2 @@
+ninja: Entering directory `/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/armeabi-v7a'
+ninja: no work to do.

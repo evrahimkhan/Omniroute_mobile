@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, EmptyState, Loading, uiStyles } from '../../components/ui/kit';
 import { Sheet } from '../../components/ui/Sheet';
@@ -38,22 +39,25 @@ import { theme } from '../../lib/theme';
 export default function ChatScreen() {
   const { api, waiting } = useApiContext();
   const { showToast } = useToast();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ model?: string }>();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamed, setStreamed] = useState('');
-  const [model, setModel] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(params.model ? String(params.model) : null);
   const [modelSheet, setModelSheet] = useState(false);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const abort = useRef<AbortController | null>(null);
   const list = useRef<FlatList<ChatMessage>>(null);
 
   // A model chosen on the Models screen arrives as a route param.
-  useEffect(() => {
+  const [prevParamModel, setPrevParamModel] = useState(params.model);
+  if (params.model !== prevParamModel) {
+    setPrevParamModel(params.model);
     if (params.model) setModel(String(params.model));
-  }, [params.model]);
+  }
 
   useEffect(() => {
     if (!api || models.length) return;
@@ -134,7 +138,7 @@ export default function ChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 84 : 0}
     >
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <Pressable style={styles.modelBtn} onPress={() => setModelSheet(true)} accessibilityRole="button">
           <MaterialCommunityIcons name="robot-outline" size={16} color={theme.accent} />
           <Text style={styles.modelName} numberOfLines={1}>

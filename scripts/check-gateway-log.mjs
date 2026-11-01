@@ -73,6 +73,12 @@ const CASES = [
   ],
   ['[gateway] starting dist/server.js on 127.0.0.1:20128', 'starting', 'dist/server.js on 127.0.0.1:20128', 'starting '],
   [
+    '[gateway] the server is answering on http://127.0.0.1:20128/healthz',
+    'ready',
+    'http://127.0.0.1:20128/healthz',
+    'the server is answering on ',
+  ],
+  [
     '[gateway] FAILED: Error: checksum mismatch: expected abc, got def',
     'failed',
     'Error: checksum mismatch: expected abc, got def',
@@ -193,6 +199,10 @@ async function main() {
     check(
       'already installed → starting',
       describeGatewayLog('[gateway] gateway already installed at /x (t)').phase === 'starting'
+    );
+    check(
+      'server answering → ready',
+      describeGatewayLog('[gateway] the server is answering on http://127.0.0.1:20128/healthz').phase === 'ready'
     );
     check(
       'mid-download → installing',
@@ -335,6 +345,11 @@ async function main() {
     check(
       'a running runtime that has started the server reads as starting',
       deriveGatewayPhase({ running: true, exited: false, hasMarker: true, log: STARTED }) === 'starting'
+    );
+    const ANSWERING = '[gateway] the server is answering on http://127.0.0.1:20128/healthz';
+    check(
+      'a running runtime with an answering server reads as ready',
+      deriveGatewayPhase({ running: true, exited: false, hasMarker: true, log: ANSWERING }) === 'ready'
     );
     check(
       'an exited runtime reads as failed',

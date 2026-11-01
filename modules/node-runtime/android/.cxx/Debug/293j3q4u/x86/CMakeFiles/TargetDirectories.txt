@@ -1,0 +1,3 @@
+/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/x86/CMakeFiles/noderuntime_jni.dir
+/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/x86/CMakeFiles/edit_cache.dir
+/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/x86/CMakeFiles/rebuild_cache.dir

@@ -50,10 +50,11 @@ export default function SignInScreen() {
   // finishes — and the effect that calls `ask` would fire again, forever. The
   // screen would quietly hammer the gateway instead of asking it once.
   const refreshRef = useRef(session.refresh);
-  refreshRef.current = session.refresh;
+  useEffect(() => {
+    refreshRef.current = session.refresh;
+  }, [session.refresh]);
 
   const ask = useCallback(async () => {
-    setProbing(true);
     // Both questions, in parallel: "is anything serving the API there" and "does
     // it recognise this client's session". Either can be answered without the
     // other, and the screen needs both to say anything true.
@@ -167,7 +168,7 @@ export default function SignInScreen() {
                 <>
                   <Text style={styles.note}>{probe?.detail ?? (website ? 'That address serves web pages.' : 'No answer.')}</Text>
                   <View style={styles.row}>
-                    <Button label="Try again" icon="refresh" variant="secondary" onPress={() => void ask()} style={styles.flex} />
+                    <Button label="Try again" icon="refresh" variant="secondary" onPress={() => { setProbing(true); void ask(); }} style={styles.flex} />
                     <Button
                       label={local ? 'Gateway on this phone' : 'Gateway settings'}
                       icon={local ? 'cellphone-link' : 'cog-outline'}

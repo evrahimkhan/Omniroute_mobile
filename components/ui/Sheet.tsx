@@ -9,7 +9,7 @@
  * dashboard behind one was silently dead in the old app.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -136,10 +136,12 @@ export function PromptSheet({
   onCancel: () => void;
   onSubmit: (value: string) => void;
 }) {
-  const [value, setValue] = useState(initialValue);
-  useEffect(() => {
-    if (visible) setValue(initialValue);
-  }, [visible, initialValue]);
+  const [value, setValue] = useState(initialValue ?? '');
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible) setValue(initialValue ?? '');
+  }
 
   return (
     <Sheet

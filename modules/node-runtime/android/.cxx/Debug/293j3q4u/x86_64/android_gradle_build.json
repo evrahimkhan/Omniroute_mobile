@@ -1,0 +1,38 @@
+{
+  "buildFiles": [
+    "/home/maskeddevil/omni/modules/node-runtime/android/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/maskeddevil/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/maskeddevil/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/maskeddevil/omni/modules/node-runtime/android/.cxx/Debug/293j3q4u/x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "noderuntime_jni::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86_64",
+      "artifactName": "noderuntime_jni",
+      "output": "/home/maskeddevil/omni/modules/node-runtime/android/build/intermediates/cxx/Debug/293j3q4u/obj/x86_64/libnoderuntime_jni.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/home/maskeddevil/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/home/maskeddevil/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}

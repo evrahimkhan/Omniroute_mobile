@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/home/maskeddevil/omni/modules/node-runtime/android/.cxx/RelWithDebInfo/6ux1a4b5/arm64-v8a",
+  "command": "/home/maskeddevil/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android24 --sysroot=/home/maskeddevil/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DNODE_RUNTIME_AVAILABLE=1 -Dnoderuntime_jni_EXPORTS -I/home/maskeddevil/omni/modules/node-runtime/android/src/main/cpp/include -I/home/maskeddevil/omni/modules/node-runtime/android/src/main/cpp/include/node -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -fexceptions -frtti -O2 -g -DNDEBUG -fPIC -std=gnu++20 -o CMakeFiles/noderuntime_jni.dir/node-runtime-jni.cpp.o -c /home/maskeddevil/omni/modules/node-runtime/android/src/main/cpp/node-runtime-jni.cpp",
+  "file": "/home/maskeddevil/omni/modules/node-runtime/android/src/main/cpp/node-runtime-jni.cpp"
+}
+]

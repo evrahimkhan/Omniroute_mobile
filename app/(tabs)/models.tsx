@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Badge,
@@ -33,6 +34,7 @@ import { theme } from '../../lib/theme';
  * I use" is a question.
  */
 export default function ModelsScreen() {
+  const insets = useSafeAreaInsets();
   const { api, waiting } = useApiContext();
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<string | null>(null);
@@ -40,7 +42,7 @@ export default function ModelsScreen() {
 
   const models = usePolling(api ? () => getModels(api, { all: true }) : null, 0);
 
-  const catalogue = models.data ?? [];
+  const catalogue = useMemo(() => models.data ?? [], [models.data]);
 
   const providers = useMemo(() => {
     const counts = new Map<string, number>();
@@ -74,7 +76,7 @@ export default function ModelsScreen() {
 
   return (
     <View style={uiStyles.screen}>
-      <View style={styles.toolbar}>
+      <View style={[styles.toolbar, { paddingTop: Math.max(insets.top, 12) }]}>
         <SearchField value={query} onChange={setQuery} placeholder="Search models" />
         <FlatList
           horizontal

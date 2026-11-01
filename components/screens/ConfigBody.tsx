@@ -14,7 +14,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
-import { Button, Card, Chip, Field, ToggleRow, uiStyles } from '../ui/kit';
+import { Button, Card, Chip, Field, ToggleRow } from '../ui/kit';
 import { Sheet } from '../ui/Sheet';
 import { useToast } from '../ui/Toast';
 import { useApi } from '../../lib/api/context';

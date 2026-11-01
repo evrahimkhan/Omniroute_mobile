@@ -144,6 +144,12 @@ function startGateway() {
     if (path === '/api/providers' && req.method === 'PATCH') {
       return collect(() => json(200, { message: 'ok', updated: 1, notFound: [] }));
     }
+    if (path === '/api/providers' && req.method === 'POST') {
+      return collect((body) => json(201, { id: 'c3', provider: body.provider, name: body.name, isActive: false }));
+    }
+    if (path.startsWith('/api/providers/') && req.method === 'DELETE') {
+      return json(200, { message: 'ok' });
+    }
 
     if (path === '/api/models') {
       // Deliberately the `{models: [...]}` shape, with a namespaced id.
@@ -378,6 +384,14 @@ try {
   const patchBody = requests.filter((r) => r.path === '/api/providers' && r.method === 'PATCH').at(-1).body;
   check('turning a provider off sends {ids, isActive}', patched.updated === 1 && patchBody.ids[0] === 'c1' && patchBody.isActive === false);
 
+  const createdProvider = await resources.createProvider(api, { provider: 'openai', name: 'OpenAI', apiKey: 'sk-test' });
+  const postBody = requests.filter((r) => r.path === '/api/providers' && r.method === 'POST').at(-1).body;
+  check('creating a provider sends {provider, name, apiKey}', createdProvider?.id === 'c3' && postBody.provider === 'openai');
+
+  await resources.deleteProvider(api, 'c1');
+  const deleteReq = requests.filter((r) => r.path === '/api/providers/c1' && r.method === 'DELETE').at(-1);
+  check('deleting a provider calls DELETE /api/providers/:id', deleteReq !== undefined);
+
   const models = await resources.getModels(api);
   check('models read from {models}', models.length === 2);
   check('a string model becomes an entry with a provider', models[1].id === 'anthropic/claude-sonnet-4' && models[1].provider === 'anthropic');
@@ -510,7 +524,7 @@ try {
     check(
       'the message names the address and says what to do',
       /answered with a web page, not the gateway API/.test(siteError.message) &&
-        siteError.message.includes('127.0.0.1:20128'),
+        siteError.message.includes(website.base),
       siteError.message
     );
     check('no markup leaks into the message', !/<|DOCTYPE|html>/i.test(siteError.message));

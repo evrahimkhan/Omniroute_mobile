@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Badge,
@@ -8,6 +9,7 @@ import {
   Chip,
   EmptyState,
   ErrorState,
+  Field,
   KeyValue,
   ListRow,
   Loading,
@@ -19,9 +21,22 @@ import {
 import { Sheet, confirm } from '../../components/ui/Sheet';
 import { useToast } from '../../components/ui/Toast';
 import { useApiContext, usePolling } from '../../lib/api/context';
-import { getProviders, setProvidersActive, type Provider } from '../../lib/api/resources';
+import {
+  createProvider,
+  deleteProvider,
+  getProviders,
+  setProvidersActive,
+  type Provider,
+} from '../../lib/api/resources';
 import { scalarFields } from '../../lib/api/shape';
 import { theme } from '../../lib/theme';
+
+import { UPSTREAM_PROVIDER_PRESETS } from '../../lib/api/upstreamProviders';
+
+const PRESET_PROVIDERS = [
+  ...UPSTREAM_PROVIDER_PRESETS,
+  { id: 'custom', label: 'Custom…', name: '' },
+];
 
 /**
  * Providers — the connection list, natively.
@@ -38,12 +53,31 @@ import { theme } from '../../lib/theme';
  * ChatGPT-web connection, say) must not look enabled in the app.
  */
 export default function ProvidersScreen() {
+  const insets = useSafeAreaInsets();
   const { api, waiting } = useApiContext();
   const { showToast } = useToast();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'on' | 'off'>('all');
   const [selected, setSelected] = useState<Provider | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newProvider, setNewProvider] = useState('openai');
+  const [newName, setNewName] = useState('OpenAI');
+  const [newApiKey, setNewApiKey] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [presetSearch, setPresetSearch] = useState('');
+
+  const filteredPresets = useMemo(() => {
+    const q = presetSearch.trim().toLowerCase();
+    if (!q) return PRESET_PROVIDERS;
+    return PRESET_PROVIDERS.filter(
+      (p) =>
+        p.id.toLowerCase().includes(q) ||
+        p.label.toLowerCase().includes(q) ||
+        p.name.toLowerCase().includes(q)
+    );
+  }, [presetSearch]);
 
   const providers = usePolling(api ? () => getProviders(api) : null, 30_000);
 
@@ -60,6 +94,68 @@ export default function ProvidersScreen() {
           : true
       );
   }, [providers.data, query, filter]);
+
+  const selectPreset = (preset: (typeof PRESET_PROVIDERS)[number]) => {
+    if (preset.id === 'custom') {
+      setNewProvider('');
+      setNewName('');
+    } else {
+      setNewProvider(preset.id);
+      setNewName(preset.name);
+    }
+  };
+
+  const submitCreate = async () => {
+    if (!api) return;
+    const providerSlug = newProvider.trim().toLowerCase();
+    const displayName = newName.trim() || providerSlug;
+    const key = newApiKey.trim();
+    if (!providerSlug) {
+      setCreateError('Provider ID is required');
+      return;
+    }
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      await createProvider(api, {
+        provider: providerSlug,
+        name: displayName,
+        apiKey: key || undefined,
+      });
+      showToast(`Added ${displayName}`, 'ok');
+      setCreating(false);
+      setNewProvider('openai');
+      setNewName('OpenAI');
+      setNewApiKey('');
+      await providers.reload();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const remove = async (provider: Provider) => {
+    if (!api) return;
+    const ok = await confirm({
+      title: `Delete ${provider.name}?`,
+      message: 'This connection will be removed from the gateway and routing.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusyId(provider.id);
+    try {
+      await deleteProvider(api, provider.id);
+      showToast(`${provider.name} deleted`, 'ok');
+      setSelected(null);
+      await providers.reload();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'danger');
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const toggle = async (provider: Provider, next: boolean) => {
     if (!api) return;
@@ -93,8 +189,13 @@ export default function ProvidersScreen() {
 
   return (
     <View style={uiStyles.screen}>
-      <View style={styles.toolbar}>
-        <SearchField value={query} onChange={setQuery} placeholder="Search providers" />
+      <View style={[styles.toolbar, { paddingTop: Math.max(insets.top, 12) }]}>
+        <View style={styles.searchRow}>
+          <View style={styles.searchFieldWrap}>
+            <SearchField value={query} onChange={setQuery} placeholder="Search providers" />
+          </View>
+          <Button label="Add" icon="plus" onPress={() => setCreating(true)} style={styles.addBtn} />
+        </View>
         <View style={styles.chips}>
           {(['all', 'on', 'off'] as const).map((value) => (
             <Chip
@@ -127,8 +228,9 @@ export default function ProvidersScreen() {
                 body={
                   query
                     ? 'Try a different name.'
-                    : 'Add a provider in the dashboard once — the app shows it here afterwards.'
+                    : 'Add a provider connection (OpenAI, Anthropic, OpenRouter, etc.) to start routing requests.'
                 }
+                action={<Button label="Add provider" icon="plus" onPress={() => setCreating(true)} />}
               />
             )
           }
@@ -154,19 +256,108 @@ export default function ProvidersScreen() {
       )}
 
       <Sheet
+        visible={creating}
+        onClose={() => setCreating(false)}
+        title="Add provider connection"
+        subtitle="Connect an AI service to route model requests."
+        fullHeight
+        footer={
+          <Button
+            label="Save connection"
+            icon="check"
+            loading={createBusy}
+            onPress={submitCreate}
+          />
+        }
+      >
+        <SectionHeader title="SEARCH 380+ PRESETS" />
+        <View style={{ marginBottom: 12 }}>
+          <SearchField
+            value={presetSearch}
+            onChange={setPresetSearch}
+            placeholder="Search provider presets (e.g. deepseek, groq, together)..."
+          />
+        </View>
+        <View style={{ gap: 6, marginBottom: 16 }}>
+          {filteredPresets.map((p) => {
+            const isCustom = p.id === 'custom';
+            const isSelected = isCustom
+              ? !PRESET_PROVIDERS.some((item) => item.id !== 'custom' && item.id === newProvider)
+              : newProvider === p.id;
+            return (
+              <ListRow
+                key={p.id}
+                icon={isCustom ? 'pencil-outline' : 'lan-connect'}
+                iconColor={isSelected ? theme.accent : theme.textMuted}
+                title={p.label}
+                subtitle={p.id}
+                right={
+                  isSelected ? (
+                    <Badge label="Selected" tone="accent" />
+                  ) : undefined
+                }
+                onPress={() => selectPreset(p)}
+              />
+            );
+          })}
+        </View>
+
+        <Field
+          label="Provider ID"
+          value={newProvider}
+          onChange={(v) => {
+            setNewProvider(v);
+            if (!newName || PRESET_PROVIDERS.some((item) => item.name === newName)) {
+              setNewName(v.charAt(0).toUpperCase() + v.slice(1));
+            }
+          }}
+          placeholder="e.g. openai, anthropic, openrouter"
+          hint="ID recognized by OmniRoute (over 350 providers supported)."
+        />
+
+        <Field
+          label="Connection name"
+          value={newName}
+          onChange={setNewName}
+          placeholder="e.g. My OpenAI"
+          hint="A label to identify this connection."
+        />
+
+        <Field
+          label="API Key"
+          value={newApiKey}
+          onChange={setNewApiKey}
+          placeholder="sk-..."
+          secure
+          hint="Stored securely on this gateway. Never shared."
+        />
+
+        {createError ? <Text style={styles.errorText}>{createError}</Text> : null}
+      </Sheet>
+
+      <Sheet
         visible={selected !== null}
         onClose={() => setSelected(null)}
         title={selected?.name ?? ''}
         subtitle={selected ? `${selected.provider} · ${selected.id}` : undefined}
         footer={
           selected ? (
-            <ToggleRow
-              title={selected.active ? 'Enabled' : 'Disabled'}
-              subtitle="A disabled connection is skipped by routing, without losing its credentials."
-              value={selected.active ?? false}
-              disabled={busyId === selected.id}
-              onChange={(next) => toggle(selected, next)}
-            />
+            <View style={styles.sheetFooter}>
+              <ToggleRow
+                title={selected.active ? 'Enabled' : 'Disabled'}
+                subtitle="A disabled connection is skipped by routing, without losing its credentials."
+                value={selected.active ?? false}
+                disabled={busyId === selected.id}
+                onChange={(next) => toggle(selected, next)}
+              />
+              <Button
+                label="Delete connection"
+                variant="danger"
+                icon="delete-outline"
+                loading={busyId === selected.id}
+                onPress={() => remove(selected)}
+              />
+            </View>
           ) : undefined
         }
       >
@@ -197,8 +388,14 @@ export default function ProvidersScreen() {
 
 const styles = StyleSheet.create({
   toolbar: { paddingHorizontal: 14, paddingTop: 12, gap: 10 },
+  searchRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  searchFieldWrap: { flex: 1 },
+  addBtn: { paddingHorizontal: 14, paddingVertical: 10 },
   chips: { flexDirection: 'row', gap: 8 },
   list: { padding: 14, paddingBottom: 96 },
   switchBtn: { paddingHorizontal: 14, paddingVertical: 8 },
   sheetRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  sheetFooter: { gap: 12 },
+  presets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  errorText: { color: theme.danger, fontSize: 13, marginTop: 8 },
 });

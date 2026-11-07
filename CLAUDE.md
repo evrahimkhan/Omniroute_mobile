@@ -1,6 +1,6 @@
 # OmniRoute Mobile (Claude Code Guidelines)
 
-This repository is an Expo SDK 57 / React Native 0.86.3 / React 19 mobile client for OmniRoute with Continuous Native Generation (CNG) and an embedded Node.js runtime.
+This repository is an Expo SDK 57 / React Native 0.86.3 / React 19 Android mobile client for OmniRoute with Continuous Native Generation (CNG) and an embedded Node.js runtime. (Note: iOS targets are dropped; focus exclusively on Android).
 
 ## Environment & Build Requirements
 
@@ -15,7 +15,7 @@ This repository is an Expo SDK 57 / React Native 0.86.3 / React 19 mobile client
 
 Run before committing any changes:
 ```bash
-npm run api:test       # 122 API client and catalog assertions
+npm run api:test       # 124 API client and catalog assertions
 npm run lint           # Expo & ESLint checks
 npm run typecheck      # TypeScript compilation check (tsc --noEmit)
 ```

@@ -96,7 +96,7 @@ export default function ModelsScreen() {
           )}
         />
         <Text style={styles.count}>
-          {rows.length} shown{models.data ? ` · ${configured} callable now` : ''}
+          {rows.length} models shown{models.data ? ` · ${configured} callable now` : ''}
         </Text>
       </View>
 
@@ -104,7 +104,7 @@ export default function ModelsScreen() {
         <ErrorState message={models.error} onRetry={models.reload} />
       ) : (
         <FlatList
-          data={rows.slice(0, 600)}
+          data={rows}
           keyExtractor={(item) => item.id}
           initialNumToRender={16}
           contentContainerStyle={styles.list}

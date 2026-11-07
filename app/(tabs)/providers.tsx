@@ -278,8 +278,11 @@ export default function ProvidersScreen() {
             placeholder="Search provider presets (e.g. deepseek, groq, together)..."
           />
         </View>
-        <View style={{ gap: 6, marginBottom: 16 }}>
-          {filteredPresets.map((p) => {
+        <Text style={styles.countText}>
+          {filteredPresets.length > 50 ? `Showing 50 of ${filteredPresets.length} matching presets` : `${filteredPresets.length} presets`}
+        </Text>
+        <View style={{ gap: 6, marginBottom: 16, marginTop: 6 }}>
+          {filteredPresets.slice(0, 50).map((p) => {
             const isCustom = p.id === 'custom';
             const isSelected = isCustom
               ? !PRESET_PROVIDERS.some((item) => item.id !== 'custom' && item.id === newProvider)
@@ -397,5 +400,6 @@ const styles = StyleSheet.create({
   sheetRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   sheetFooter: { gap: 12 },
   presets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  countText: { color: theme.textMuted, fontSize: 11, fontWeight: '600' },
   errorText: { color: theme.danger, fontSize: 13, marginTop: 8 },
 });
